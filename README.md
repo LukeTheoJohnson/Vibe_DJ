@@ -19,13 +19,6 @@ No backend · no framework · no bundler · no build step &nbsp;·&nbsp; MIT-lic
 
 ---
 
-## Three ways to play
-
-The app is one page with four hash-routed views (**Menu · Live · Crate · Remix**). Audio is
-a single source at a time, with one **⏹ stop** in the header that halts whatever's playing.
-On the menu, a random record from your crate drifts underneath at low volume once you click
-in — the place is never silent.
-
 ### 🎛 Live Set — two decks, one verdict at a time
 
 Turn-based, and physical. The DJ **cuts one change at a time onto Deck B** as an acetate
@@ -58,11 +51,11 @@ the crate wearing its approve-rate. From the save prompt, the DJ then rolls a fr
 
 ![The pressing modal — the disc with its stuck colours, the name imprinted on the label, and which version is being banked](screenshots/03-press.png)
 
-### 🗃 The Crate — your dubplates
+### 🗃 The Crate
 
-A standalone player and your vault. Every saved track is a full **dubplate** — vinyl face,
-genome snapshot, cover seed, metadata — persisted in `localStorage` and portable via
-Export/Import JSON. Spin (the disc rotates while previewing), re-imprint the label, send
+A standalone player and your vault. Every saved track is a full **dubplate** with a vinyl face,
+genome snapshot, cover seed, and metadata persisted in `localStorage` and portable via
+Export/Import JSON. Spin, imprint the label, send
 to Remix, **export to MP3** (⬇ — a real-time render captured and encoded in-browser), or
 delete. Because every track is seeded, a record's code is fully reproducible.
 
