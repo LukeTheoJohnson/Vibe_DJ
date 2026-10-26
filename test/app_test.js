@@ -34,7 +34,7 @@ window.localStorage.setItem('sdj.crate', JSON.stringify([
 ]));
 
 // ---- load app modules in the window context ----
-for (const f of ['rng', 'theory', 'names', 'dj', 'viz', 'log', 'art', 'vinyl', 'app']) {
+for (const f of ['rng', 'theory', 'names', 'dj', 'curate', 'log', 'art', 'vinyl', 'visualiser', 'menu', 'app']) {
   try {
     window.eval(fs.readFileSync(path.join(root, 'src', f + '.js'), 'utf8'));
   } catch (e) {
@@ -50,20 +50,40 @@ function check(name, cond, extra) {
 }
 
 function balanced(str) {
-  let par = 0, inStr = false, q = 0;
+  // Track double- and single-quoted strings independently so a paren inside a
+  // string literal — s('bd(3,8)') or s("bd(3,8)") — is never counted as
+  // structural. Both quote kinds must also close (even count each).
+  let par = 0, q = 0, sq = 0, inD = false, inS = false;
   for (const c of str) {
-    if (c === '"') { inStr = !inStr; q++; continue; }
-    if (inStr) continue;
+    if (inD) { if (c === '"') { inD = false; q++; } continue; }
+    if (inS) { if (c === "'") { inS = false; sq++; } continue; }
+    if (c === '"') { inD = true; q++; continue; }
+    if (c === "'") { inS = true; sq++; continue; }
     if (c === '(') par++; if (c === ')') par--;
   }
-  return par === 0 && q % 2 === 0;
+  return par === 0 && q % 2 === 0 && sq % 2 === 0;
 }
 
 const crateLen = () => JSON.parse(window.localStorage.getItem('sdj.crate') || '[]').length;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Poll a condition instead of hoping a fixed sleep is long enough. Resolves as
+// soon as condFn() is truthy (returning true), or false after timeoutMs — the
+// caller still asserts the real post-condition, so a timeout just fails fast.
+async function until(condFn, timeoutMs = 500, stepMs = 5) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let ok = false;
+    try { ok = !!condFn(); } catch (e) { ok = false; }
+    if (ok) return true;
+    await sleep(stepMs);
+  }
+  return false;
+}
 
 (async () => {
-  await sleep(100); // let DOMContentLoaded fire so boot() runs
+  // let DOMContentLoaded fire so boot() runs — poll for the crate DOM instead
+  // of guessing a fixed delay
+  await until(() => doc.querySelectorAll('#crate .crate-item').length >= 1, 800);
 
   // boot ran on load. Crate should be rendered from seeded storage. The seeded
   // entry uses the OLD record shape (no genome/art/id) — so this also proves the
@@ -84,7 +104,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // start the set — seed the engine first so the whole run is deterministic
   window.SDJ.engine.masterSeed = 0xC0FFEE;
   doc.getElementById('startBtn').click();
-  await sleep(80); // let async startSet resolve
+  await until(() => evalCalls.length >= 1, 800); // let async startSet resolve
 
   check('evaluate called on start', evalCalls.length >= 1);
   check('first evaluated code is balanced', evalCalls.length && balanced(evalCalls[0]), evalCalls[0]);
@@ -209,7 +229,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   check('approving re-pitches a fresh suggestion',
     window.SDJ.live.pitching() !== false && !doc.getElementById('sgCard').hidden);
   check('approving can grow the arrangement', window.SDJ.engine.state().activeCount >= partsBefore);
-  check('a decision logs a DJ move', doc.querySelectorAll('#log li').length >= 1);
+  check('a decision lands in the set log (the DJ-moves list is gone)',
+    typeof window.SDJ.SetLog.stats === 'function' && window.SDJ.SetLog.count() >= 1);
   check('the pitch history records the call', doc.querySelectorAll('#djFeed li').length >= 1);
   window.SDJ.live.skip();         // skip re-pitches without committing
   await sleep(20);
@@ -229,11 +250,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // the A/B switch is an on/off flip (no blend): OFF = the current track only,
   // ON = the full pitched change — two audibly different, balanced programs.
   const abSwitch = doc.getElementById('abSwitch');
+  let abEvalsBefore = evalCalls.length;
   abSwitch.checked = false; abSwitch.dispatchEvent(new window.Event('change'));
-  await sleep(30);
+  await until(() => evalCalls.length > abEvalsBefore, 300);
   const trackOnly = evalCalls[evalCalls.length - 1];
+  abEvalsBefore = evalCalls.length;
   abSwitch.checked = true; abSwitch.dispatchEvent(new window.Event('change'));
-  await sleep(30);
+  await until(() => evalCalls.length > abEvalsBefore, 300);
   const withChange = evalCalls[evalCalls.length - 1];
   check('the A/B switch flips between two different programs', trackOnly !== withChange, trackOnly);
   check('both switch positions stay balanced', balanced(trackOnly) && balanced(withChange));
@@ -423,6 +446,79 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     pressedFull.loopCode.includes('.color(') && balanced(pressedFull.loopCode));
   check('live evaluations stayed balanced', evalCalls.every(balanced));
 
+  // ---- curation: the direction box steers the DJ (parser + wiring + engine) --
+  const Cur = window.SDJ.Curate;
+  const cd1 = Cur.parse('no hihats');
+  check('curate: "no hihats" bans the hats lane',
+    cd1.bans.length === 1 && cd1.bans[0] === 1 &&
+    cd1.chips.some((c) => c.kind === 'ban' && c.lane === 1), JSON.stringify(cd1));
+  const cd2 = Cur.parse('more bass, darker, 140 bpm, minimal');
+  const cd2Kinds = cd2.chips.map((c) => c.kind);
+  check('curate: a compound direction parses every clause',
+    cd2.features.length === 1 && cd2.features[0] === 2 && cd2.mood === 'dark' &&
+    cd2.tempo === 140 && cd2.density === -1 &&
+    ['feature', 'mood', 'tempo', 'density'].every((k) => cd2Kinds.indexOf(k) >= 0),
+    JSON.stringify(cd2));
+  const cd3 = Cur.parse('trap');
+  check('curate: a genre name pins the genre', cd3.genre === 'trap', JSON.stringify(cd3));
+  const cd4 = Cur.parse('please make it wonderful somehow');
+  check('curate: unknown words produce no directives',
+    !cd4.bans.length && !cd4.features.length && cd4.mood === null && cd4.tempo === null &&
+    cd4.density === null && cd4.genre === null && !cd4.chips.length, JSON.stringify(cd4));
+
+  // wiring: "no hihats" typed mid-set acts NOW — the hats come off the record,
+  // the chip receipts what happened, and the DJ stays off the lane from then on
+  window.SDJ.curate.set('no hihats');
+  const hatChips = Array.from(doc.querySelectorAll('#curateChips .curate-chip'));
+  const hatChip = hatChips.find((c) => /^no hi-hats — (dropped|kept out)$/.test(c.textContent));
+  check('the direction renders a receipt chip (what happened, not just what was heard)',
+    hatChips.length >= 1 && !!hatChip,
+    hatChips.map((c) => c.textContent).join(' | '));
+  const curSong = window.SDJ.engine.song;
+  check('"no hihats" takes the hats off the record immediately (both versions)',
+    curSong.genome.active[1] === false &&
+    (!curSong.pending || !curSong.pending.snapshot || curSong.pending.snapshot.active[1] === false));
+  if (window.SDJ.live.pitching()) { window.SDJ.live.approve(); await sleep(10); } // judge the card on offer
+  let hatAdd = false;
+  for (let k = 0; k < 40; k++) {
+    if (window.SDJ.live.pitching() === 'save') { window.SDJ.live.skip(); await sleep(6); continue; }
+    const pend = window.SDJ.engine.song.pending;
+    if (!pend) break;
+    if (pend.kind === 'add' && pend.layer === 1) { hatAdd = true; break; }
+    if (k % 2) window.SDJ.live.skip(); else window.SDJ.live.approve();
+    await sleep(6);
+  }
+  check('a typed "no hihats" keeps the DJ off the hi-hats', !hatAdd);
+  // imperative round-trip: a ban cuts a playing lane, a feature brings one in
+  window.SDJ.curate.set('no air');
+  const airSong = window.SDJ.engine.song;
+  check('"no air" cuts the atmosphere from the record now',
+    airSong.genome.active[6] === false && airSong.banned['add:6'] === true);
+  window.SDJ.curate.set('more air');
+  check('"more air" lifts the ban and brings the atmosphere straight in',
+    airSong.genome.active[6] === true && !airSong.banned['add:6'] &&
+    /— brought in$/.test((doc.querySelector('#curateChips .curate-chip') || {}).textContent || ''),
+    (doc.querySelector('#curateChips .curate-chip') || {}).textContent);
+  window.SDJ.curate.clear(); // neutral board for the remaining checks
+  check('clearing the direction lifts the curation ban (chips gone too)',
+    !window.SDJ.engine.song.banned['add:1'] &&
+    doc.querySelectorAll('#curateChips .curate-chip').length === 0);
+
+  // engine hook: mood narrows the scale palette, tempo skews the BPM — and the
+  // seed is never touched (steer-only, same song either way)
+  const cue = new window.SDJ.DJEngine();
+  cue.masterSeed = 4242;
+  cue.setCuration({ scaleFilter: Cur.MOOD_SCALES.dark, tempo: 'slow' });
+  cue.newSong();
+  const cg = cue.song.genre;
+  const cThird = Math.max(1, Math.round((cg.bpmHi - cg.bpmLo) / 3));
+  check('curation steers a fresh song dark and slow',
+    Cur.MOOD_SCALES.dark.indexOf(cue.song.scaleType) >= 0 && cue.song.bpm <= cg.bpmLo + cThird,
+    cue.song.scaleType + ' @ ' + cue.song.bpm + 'bpm [' + cg.bpmLo + '-' + cg.bpmHi + ']');
+  const cue2 = new window.SDJ.DJEngine();
+  cue2.masterSeed = 4242; cue2.newSong();
+  check('curation never touches the seed', cue.song.seed === cue2.song.seed);
+
   // ---- highlight escapes mini-notation < > ----
   engine.song.stage = 6; engine.song.variation = 6;
   const sample = engine.render();
@@ -467,6 +563,158 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     balanced(ambCode) && ambCode.includes('.gain(0.3)'), ambCode);
   window.SDJ.menuAmbient.stop();
   check('stopping menu ambience clears it', !window.SDJ.menuAmbient.playing());
+
+  // ---- new genres: rock / metal / house / synthwave render clean sets ----
+  // Each genre gets a fresh engine on a fixed seed and ~15 accepted pitches;
+  // the loop render, the mid-fader A/B blend (while the pitch is pending) and
+  // the arranged render must stay paren/quote balanced throughout the build.
+  for (const gnr of window.SDJ.Theory.GENRES.map((g) => g.id)) {
+    const ge = new window.SDJ.DJEngine();
+    ge.masterSeed = 0xBADD1E; ge.genrePref = gnr; ge.newSong(); ge.voteReset();
+    let loopBal = true, abMidBal = true, arrGBal = true, pitched = 0;
+    for (let k = 0; k < 15; k++) {
+      const pg = ge.proposeChange();
+      if (!pg) break;
+      pitched++;
+      if (!balanced(ge.renderAB(0.5))) abMidBal = false; // pitch pending: both versions blended
+      ge.acceptChange();
+      if (!balanced(ge.render())) loopBal = false;
+      if (!balanced(ge.renderArranged())) arrGBal = false;
+    }
+    check(gnr + ': every loop render stays balanced across the build', loopBal && pitched > 0, 'pitches=' + pitched);
+    check(gnr + ': mid-fader A/B blends stay balanced', abMidBal);
+    check(gnr + ': arranged renders stay balanced', arrGBal);
+  }
+  // riff genres must never open bass-less; house must sit in the club pocket
+  for (const gnr of ['rock', 'metal']) {
+    const fe = new window.SDJ.DJEngine();
+    fe.masterSeed = 0xBADD1E; fe.genrePref = gnr; fe.newSong();
+    check(gnr + ' opens with the bass riff seeded in', fe.song.genome.active[2] === true);
+  }
+  const he = new window.SDJ.DJEngine();
+  he.masterSeed = 0xBADD1E; he.genrePref = 'house'; he.newSong();
+  check('house bpm sits in the 120-128 pocket', he.song.bpm >= 120 && he.song.bpm <= 128,
+    'bpm=' + he.song.bpm);
+
+  // ---- visualiser: the scene system mounts safely headless ----
+  check('visualiser exposes read + mount',
+    !!window.SDJ.Visualiser && typeof window.SDJ.Visualiser.read === 'function' &&
+    typeof window.SDJ.Visualiser.mount === 'function');
+  let vizOk = true, vizInst = null;
+  try {
+    vizInst = window.SDJ.Visualiser.mount(doc.createElement('canvas'), { mode: 'mini' });
+    vizInst.start(); vizInst.resize(); vizInst.stop(); vizInst.destroy();
+  } catch (e) { vizOk = false; }
+  check('mounting a scene visualiser on the stubbed canvas is start/stop-safe',
+    vizOk && !!vizInst && typeof vizInst.start === 'function' && typeof vizInst.stop === 'function');
+  const vizRead = window.SDJ.Visualiser.read();
+  check('read() degrades to a synthetic-idle signal without an analyser',
+    !!vizRead && typeof vizRead.live === 'boolean');
+
+  // ---- SetLog.stats() on known content (T-2) -----------------------------
+  // The exported SDJ.SetLog is the live singleton (holding the current set's
+  // trace). Build a fresh, isolated instance off its prototype so these
+  // assertions read only the rows we push — the constructor is closure-local.
+  const freshLog = () => {
+    const l = Object.create(Object.getPrototypeOf(window.SDJ.SetLog));
+    l.rows = []; l.t0 = 0; l.cap = 50000;
+    return l;
+  };
+  const sl = freshLog();
+  sl.mark('set');                                    // a boundary row (not a tick)
+  // four evolution ticks with known moves/verdicts/state fields. Ticks 1 & 2
+  // share an identical state key; ticks 3 & 4 are distinct → 3 unique states.
+  sl.record({ md: 'building', vk: 'kept',     mv: 'add kick', act: 'add', vr: [1], en: 2, bk: 'x', pr: 'p0', sc: 'minor' });
+  sl.record({ md: 'building', vk: 'kept',     mv: 'add kick', act: 'add', vr: [1], en: 2, bk: 'x', pr: 'p0', sc: 'minor' });
+  sl.record({ md: 'building', vk: 'kept',     mv: 'add bass', act: 'add', vr: [2], en: 3, bk: 'x', pr: 'p0', sc: 'minor' });
+  sl.record({ md: 'searching', vk: 'reverted', mv: 'rework hats', act: 'rework', vr: [1], en: 3, bk: 'y', pr: 'p1', sc: 'dorian' });
+  sl.mark('song', { reason: 'banger' });             // a banger boundary
+  const st = sl.stats();
+  check('SetLog.stats counts only the ticks (boundary rows excluded)', st.ticks === 4, 'ticks=' + st.ticks);
+  check('SetLog.stats derives an accept rate from the verdicts',
+    st.acceptRate === 75 && st.verdicts.kept === 3 && st.verdicts.reverted === 1, JSON.stringify(st.verdicts) + ' acc=' + st.acceptRate);
+  check('SetLog.stats collapses repeated genome states', st.uniqueStates === 3 && st.stateRevisits === 1,
+    'unique=' + st.uniqueStates + ' revisits=' + st.stateRevisits);
+  check('SetLog.stats ranks the most-pitched move first',
+    !!st.topMoves.length && st.topMoves[0].move === 'add kick' && st.topMoves[0].n === 2, JSON.stringify(st.topMoves[0]));
+  check('SetLog.stats tallies the banger boundary', st.bangers === 1 && st.songs === 1 && st.sets === 1,
+    'bangers=' + st.bangers + ' songs=' + st.songs + ' sets=' + st.sets);
+
+  // ---- SetLog ring-buffer cap + JSON round-trip (T-3) --------------------
+  const capLog = freshLog();
+  capLog.cap = 20; // small cap so cap+10 stays fast
+  for (let i = 0; i < capLog.cap + 10; i++) capLog.record({ md: 'building', mv: 'm' + i, act: 'a', vr: [], en: 1, bk: 'b', pr: 'p', sc: 's' });
+  check('SetLog ring buffer never exceeds its cap', capLog.count() === capLog.cap, 'count=' + capLog.count());
+  const roundTrip = JSON.parse(window.SDJ.SetLog.toJSON());
+  check('SetLog.toJSON round-trips the expected top-level keys',
+    roundTrip && Object.prototype.hasOwnProperty.call(roundTrip, 'generatedAt') &&
+    Object.prototype.hasOwnProperty.call(roundTrip, 'stats') &&
+    Array.isArray(roundTrip.rows), Object.keys(roundTrip || {}).join(','));
+
+  // ---- MOOD_SCALES all resolve to real scales (T-5) ----------------------
+  // Guards the "camelCase renders silent" trap: every mood scale name the parser
+  // can emit MUST exist in Theory.SCALES (the space-separated tonal form).
+  const moodScales = window.SDJ.Curate.MOOD_SCALES;
+  const allScales = window.SDJ.Theory.SCALES;
+  const strayScale = []
+    .concat(moodScales.dark || [], moodScales.bright || [])
+    .find((s) => allScales.indexOf(s) < 0);
+  check('every MOOD_SCALES name exists in Theory.SCALES (no silent camelCase)',
+    strayScale === undefined, 'stray=' + strayScale);
+
+  // ---- Cur.parse edge cases (T-6) ----------------------------------------
+  const nullShape = (d) => !d.bans.length && !d.features.length && !d.soften.length &&
+    d.mood === null && d.tempo === null && d.density === null && d.genre === null && !d.chips.length;
+  check('curate: empty input yields the all-null shape with no chips', nullShape(Cur.parse('')));
+  check('curate: whitespace-only input yields the all-null shape', nullShape(Cur.parse('   \t  ')));
+  const low = Cur.parse('50bpm'), high = Cur.parse('220bpm');
+  check('curate: a sub-range bpm clamps up to 60 and still receipts',
+    low.tempo === 60 && low.chips.some((c) => c.kind === 'tempo'), JSON.stringify(low));
+  check('curate: an over-range bpm clamps down to 200 and still receipts',
+    high.tempo === 200 && high.chips.some((c) => c.kind === 'tempo'), JSON.stringify(high));
+  const bare = Cur.parse('140');
+  check('curate: a bare in-range number reads as a tempo', bare.tempo === 140, JSON.stringify(bare));
+  const conflictA = Cur.parse('no bass, more bass');
+  const conflictB = Cur.parse('more bass, no bass');
+  check('curate: "no bass, more bass" resolves to a ban, no feature',
+    conflictA.bans.indexOf(2) >= 0 && conflictA.features.indexOf(2) < 0, JSON.stringify(conflictA));
+  check('curate: "more bass, no bass" also resolves to a ban, no feature',
+    conflictB.bans.indexOf(2) >= 0 && conflictB.features.indexOf(2) < 0, JSON.stringify(conflictB));
+
+  // ---- curation determinism + immediacy (T-7) ----------------------------
+  // The SAME feature applied to two identically-seeded fresh engines must
+  // render byte-identical output (steer is deterministic, no hidden RNG drift).
+  const detCur = Cur.parse('more air');
+  const detA = new window.SDJ.DJEngine(); detA.masterSeed = 0xFEED; detA.newSong(); detA.voteReset();
+  const detB = new window.SDJ.DJEngine(); detB.masterSeed = 0xFEED; detB.newSong(); detB.voteReset();
+  detA.song.genome.active[detCur.features[0]] = true;
+  detB.song.genome.active[detCur.features[0]] = true;
+  check('the same curation feature renders identically on identical seeds',
+    detA.render() === detB.render());
+  // Immediacy: on the live set, a dark+slow direction lands NOW — the scale
+  // moves into the dark palette and the tempo drops.
+  const bpmBeforeCur = window.SDJ.engine.song.bpm;
+  window.SDJ.curate.set('darker, slower');
+  await until(() => moodScales.dark.indexOf(window.SDJ.engine.song.scaleType) >= 0);
+  check('a live "darker, slower" moves the scale into the dark palette',
+    moodScales.dark.indexOf(window.SDJ.engine.song.scaleType) >= 0, window.SDJ.engine.song.scaleType);
+  check('a live "slower" drops the tempo', window.SDJ.engine.song.bpm < bpmBeforeCur,
+    bpmBeforeCur + ' -> ' + window.SDJ.engine.song.bpm);
+  window.SDJ.curate.clear();
+
+  // ---- lane-index coupling: lane words span exactly SDJ.STAGES (T-12) -----
+  // LANE_NAMES isn't exported, so infer the highest lane index the parser can
+  // emit and assert (max lane + 1) === the number of stages. Guards the parser
+  // and the engine from drifting apart on lane count.
+  const laneWords = ['kick', 'hihats', 'bass', 'clap', 'chords', 'lead', 'air'];
+  let maxLane = -1;
+  for (const w of laneWords) {
+    const d = Cur.parse('no ' + w);
+    if (d.bans.length) maxLane = Math.max(maxLane, d.bans[0]);
+  }
+  check('the direction box lane words span exactly SDJ.STAGES',
+    maxLane >= 0 && maxLane + 1 === window.SDJ.STAGES.length,
+    'maxLane=' + maxLane + ' stages=' + window.SDJ.STAGES.length);
 
   // report
   let pass = 0;

@@ -65,9 +65,14 @@
   const FILL_IDX = 7;                        // pseudo-lane for the fill line (maps a code line for A&R)
   const FILL_COLOR = '#c3ccff';
   const FILL_NAMES = ['', 'a riser', 'a snare build', 'an impact'];
-  // Lanes whose double is an octave shadow (pure n() melodic voices); the rest
-  // get a timing-ghost so we never transpose a sample bank by mistake.
-  const MELODIC_DOUBLE = { 2: true, 4: true, 5: true };
+  // Lanes whose double is an octave shadow (pure n() melodic voices — bass,
+  // chords, lead); the rest get a timing-ghost so we never transpose a sample
+  // bank by mistake. Derived from STAGES keys so it survives a lane reorder.
+  const MELODIC_DOUBLE = {};
+  ['bass', 'chords', 'lead'].forEach((k) => {
+    const i = STAGES.findIndex((st) => st.key === k);
+    if (i >= 0) MELODIC_DOUBLE[i] = true;
+  });
 
   const HIT_SECONDS = 10;     // held approval on a full track before it's banked
   const TRIAL = 2.5;         // seconds the DJ auditions a mutation before judging
@@ -118,6 +123,10 @@
     for (let i = 1; i < g.active.length; i++) if (g.active[i]) r.push(i);
     return r;
   }
+  // Every active lane, kick included — the set deepen()/simplify() work over.
+  function activeIdxsInclKick(g) {
+    return droppableIdxs(g).concat(g.active[0] ? [0] : []);
+  }
   function cloneGenome(g) {
     return {
       active: g.active.slice(), variant: g.variant.slice(),
@@ -141,8 +150,9 @@
   // stripped-back arrangement falls back to the gene's own level.
   function effEnergyIdx(g) {
     const act = activeCount(g);
-    const floor = act >= 5 ? 3 : act >= 3 ? 2 : 0;
-    return Math.max(g.energyIdx, floor);
+    // A full track should climax: >=6 parts reaches the top energy step.
+    const floor = act >= 6 ? 4 : act >= 5 ? 3 : act >= 3 ? 2 : 0;
+    return clamp(Math.max(g.energyIdx, floor), 0, ENERGY_STEPS.length - 1);
   }
 
   function DJEngine() {
@@ -151,6 +161,7 @@
     this.songCount = 0;
     this.banksLoaded = false; // flipped true by app.js once the kit map loads
     this.genrePref = null;    // null = surprise me; else a Theory.GENRES id to force
+    this.curation = null;     // direction-box steer: { scaleFilter, tempo } | null (see setCuration)
   }
 
   // ---- lifecycle ---------------------------------------------------------
@@ -165,12 +176,20 @@
     const genre = (this.genrePref && Theory.GENRES.find((x) => x.id === this.genrePref))
       || Rng.pick(rng, Theory.GENRES);
 
+    // The direction box can narrow the mood: keep only the palette scales the
+    // curation's filter also names, when any survive (steer, never re-seed).
+    let pal = Theory.scalesFor(genre);
+    if (this.curation && this.curation.scaleFilter) {
+      const f = pal.filter((x) => this.curation.scaleFilter.indexOf(x) >= 0);
+      if (f.length) pal = f;
+    }
+
     const song = {
       seed,
       rng,
       name: Names.generate(rng),
       key: Rng.pick(rng, Theory.ROOTS),
-      scaleType: Rng.pick(rng, Theory.scalesFor(genre)), // mood palette is genre-appropriate
+      scaleType: Rng.pick(rng, pal), // mood palette is genre-appropriate (curation can narrow it)
       prog: Rng.pick(rng, Theory.PROGRESSIONS),
       genre: genre,
       bpm: Rng.int(rng, genre.bpmLo, genre.bpmHi),
@@ -205,13 +224,24 @@
       tabu: {},          // layer index -> propCount at which it's free again
       aversion: {},      // layer index -> learned dislike (grows on revert, decays on keep)
       flatStreak: 0,     // consecutive flat/rejected verdicts -> boredom -> curveball
+      voteLog: [],       // turn-based keep/kill log; init empty so state()'s approval reads pre-vote (E-21)
       banksLoaded: !!this.banksLoaded, // snapshot so the pure engine test stays kit-free
     };
-    // Trap and drill are nothing without their 808 — those genres open with
-    // the sub already in, so a skipped pitch can never ship a bass-less track.
-    if (genre.id === 'trap' || genre.id === 'drill') {
+    // Trap and drill are nothing without their 808, and rock and metal are
+    // nothing without the riff — those genres open with
+    // the low end already in, so a skipped pitch can never ship a bass-less track.
+    if (genre.id === 'trap' || genre.id === 'drill' || genre.id === 'rock' || genre.id === 'metal') {
       song.genome.active[2] = true;
       song.genome.variant[2] = Rng.int(rng, 0, 5);
+    }
+    // Tempo direction: 'slow'/'fast' re-draw from the bottom/top third of the
+    // genre's range; a number is used directly, clamped to a sane 60–200.
+    if (this.curation && this.curation.tempo != null) {
+      const t = this.curation.tempo;
+      const third = Math.max(1, Math.round((genre.bpmHi - genre.bpmLo) / 3));
+      if (t === 'slow') song.bpm = Rng.int(rng, genre.bpmLo, genre.bpmLo + third);
+      else if (t === 'fast') song.bpm = Rng.int(rng, genre.bpmHi - third, genre.bpmHi);
+      else if (typeof t === 'number') song.bpm = clamp(Math.round(t), 60, 200);
     }
     song.cps = song.bpm / 240; // 1 cycle = 1 bar = 4 beats
     this.song = song;
@@ -231,14 +261,25 @@
     const s = this.song;
     if (s.genre && s.genre.id === genre.id) return false; // already this genre
     s.genre = genre;
-    s.bpm = Rng.int(s.rng, genre.bpmLo, genre.bpmHi);
+    // Draw the re-skin picks from a dedicated sub-RNG keyed on the seed + a
+    // constant + the revision, so a genre swap doesn't pull from (and desync)
+    // the optimiser's own s.rng stream (E-19).
+    const gr = Rng.make((s.seed ^ 0x5eeded11 ^ ((s.rev + 1) * 0x9e3779b1)) >>> 0);
+    s.bpm = Rng.int(gr, genre.bpmLo, genre.bpmHi);
     s.cps = s.bpm / 240;
     // shift the mood into the new genre's palette when the current colour doesn't
     // belong there (keeps a compatible scale, re-picks an incompatible one).
     const pal = Theory.scalesFor(genre);
-    if (pal.indexOf(s.scaleType) < 0) s.scaleType = Rng.pick(s.rng, pal);
+    if (pal.indexOf(s.scaleType) < 0) s.scaleType = Rng.pick(gr, pal);
     s.rev += 1; // a song-level musical change → shows up in _signature()
     return true;
+  };
+
+  // Steer future tracks from the direction box. cur is pre-resolved by the app:
+  // { scaleFilter: [Theory.SCALES names] | null, tempo: 'fast'|'slow'|bpm|null }.
+  // Steer-only — newSong() reads it when picking, the seed is never touched.
+  DJEngine.prototype.setCuration = function (cur) {
+    this.curation = cur || null;
   };
 
   // ---- the optimiser -----------------------------------------------------
@@ -414,7 +455,7 @@
   // (or null if there's genuinely nothing left to deepen).
   function deepen(s) {
     const g = s.genome, r = s.rng;
-    const act = droppableIdxs(g).concat(g.active[0] ? [0] : []);
+    const act = activeIdxsInclKick(g);
     const roll = Rng.int(r, 0, 3);
     if (roll === 0) {
       const opts = act.filter((i) => FX_BITS.some((b) => !(g.fx[i] & b)));
@@ -429,7 +470,7 @@
       const opts = act.filter((i) => !g.double[i]);
       if (opts.length) { const i = Rng.pick(r, opts); g.double[i] = true; return '➿ doubled ' + STAGES[i].label; }
     }
-    if (g.fill === 0) { g.fill = Rng.int(r, 1, 3); return '🎆 dropped in ' + FILL_NAMES[g.fill]; }
+    if (g.fill === 0) { g.fill = Rng.int(r, 1, 3); return g.fill ? '🎆 dropped in ' + FILL_NAMES[g.fill] : '🎆 dropped in a fill'; }
     if (act.length) { const i = Rng.pick(r, act); g.variant[i] += 1 + Rng.int(r, 0, 2); return '🔀 reshaped ' + STAGES[i].label; }
     return null;
   }
@@ -439,7 +480,7 @@
   // there's nothing left to strip, so the caller can drop a whole lane instead.
   function simplify(s) {
     const g = s.genome, r = s.rng;
-    const act = droppableIdxs(g).concat(g.active[0] ? [0] : []);
+    const act = activeIdxsInclKick(g);
     if (g.fill > 0) { g.fill = 0; return '🧹 pulled the fill'; }
     const dbl = act.filter((i) => g.double[i]);
     if (dbl.length) { const i = Rng.pick(r, dbl); g.double[i] = false; return '➖ undoubled ' + STAGES[i].label; }
@@ -534,6 +575,9 @@
       s.lastAdded = i;
       markTabu(s, i);
     };
+    // Bring a lane in and return its verdict line — folds the four identical
+    // "add(i); desc = '➕ … ' + STAGES[i].label" sites into one call (E-23).
+    const addLane = (i, prefix) => { add(i); return prefix + STAGES[i].label; };
     const dropOne = (i) => { g.active[i] = false; markTabu(s, i); };
 
     if (s.approval >= LOCK_APPROVAL && act >= MIN_FULL) {
@@ -553,8 +597,7 @@
       // once the arrangement is fleshed out it thickens (FX/double/fill) instead.
       const eager = clamp(0.72 + warm * 0.15 + intent * 0.18, 0.3, 0.97);
       if (inact.length && Rng.chance(r, eager)) {
-        add(inact[0]);
-        desc = '➕ brought in ' + STAGES[inact[0]].label;
+        desc = addLane(inact[0], '➕ brought in ');
       } else if (act >= 4 && Rng.chance(r, clamp(0.35 + intent * 0.4, 0.12, 0.9))) {
         desc = deepen(s);
       } else if (drop.length && Rng.chance(r, 0.5)) {
@@ -590,20 +633,15 @@
         if (g.active[i]) {
           const preferAdd = warm > 0.25 && inact.length;
           if (preferAdd) {
-            const j = Rng.pick(r, inact);
-            add(j);
-            desc = '➕ warmed it up — brought in ' + STAGES[j].label;
+            desc = addLane(Rng.pick(r, inact), '➕ warmed it up — brought in ');
           } else if (drop.length > 1 && !isTabu(s, i) && !likedLane(i)) {
             dropOne(i);
             desc = '➖ dropped ' + STAGES[i].label;
           } else if (inact.length) {
-            const j = Rng.pick(r, inact);
-            add(j);
-            desc = '➕ brought in ' + STAGES[j].label;
+            desc = addLane(Rng.pick(r, inact), '➕ brought in ');
           }
         } else if (!isTabu(s, i) && !dislikedLane(i)) {
-          add(i);
-          desc = '➕ tried ' + STAGES[i].label;
+          desc = addLane(i, '➕ tried ');
         }
       } else if (roll < 0.62 && drop.length) {
         const i = Rng.pick(r, drop);
@@ -648,13 +686,15 @@
   //
   // Every layer is genre-aware: trap/drill get 808 bass, half-time snares and
   // hi-hat rolls; boom bap gets bouncy kick patterns and walking bass; R&B and
-  // lo-fi get 7th-chord pads and lush atmospheres. Bucket (1..3) tracks energy.
+  // lo-fi get 7th-chord pads and lush atmospheres; rock and metal ride driven
+  // riffs and power chords; house pumps four-on-the-floor with an offbeat open
+  // hat; synthwave glows in pads and plucks. Bucket (1..3) tracks energy.
 
   DJEngine.prototype.render = function () {
     const s = this.song;
     const g = s.genome;
     const e = ENERGY_STEPS[effEnergyIdx(g)]; // 0..1 intensity (part-count floor applied)
-    const bucket = Math.round(e * 3);    // 1..3 in practice
+    const bucket = clamp(Math.round(e * 3), 1, 3);    // 1..3 (clamped: e can round to 0)
     const gid = s.genre ? s.genre.id : 'trap';
 
     const key = s.key;
@@ -665,7 +705,9 @@
 
     // Drum machine: only reach for a bank once the kit map has actually loaded,
     // otherwise the default dirt-samples kick/snare/hat play (never silence).
-    const useBank = !!this.banksLoaded && BANKS.length;
+    // Rock and metal bypass the machines entirely — the default dirt kit reads
+    // more acoustic than the 808/909 banks ever will.
+    const useBank = !!this.banksLoaded && BANKS.length && gid !== 'rock' && gid !== 'metal';
     const bankName = useBank ? BANKS[g.bank % BANKS.length] : null;
     const kit = (str) => (bankName ? str + '.bank("' + bankName + '")' : str);
 
@@ -726,9 +768,36 @@
         ['bd ~ ~ bd ~ ~ bd ~', 'bd ~ bd ~ ~ bd ~ ~'],
         ['bd ~ bd bd ~ ~ bd ~', 'bd bd ~ ~ bd ~ bd ~'],
       ];
-      const pool = (gid === 'boomBap' || gid === 'loFi')
-        ? (boomKick[bucket - 1] || boomKick[1])
-        : (trapKick[bucket - 1] || trapKick[1]);
+      // Beyond hip-hop: house pumps four-on-the-floor (with pickup variants),
+      // rock drives 1-and-3 with pushes, metal bursts into double-kick 16ths,
+      // synthwave holds a steady 80s machine pulse.
+      const houseKick = [
+        ['bd*4', 'bd ~ bd bd'],
+        ['bd*4', 'bd bd bd bd', 'bd bd bd [bd bd]'],
+        ['bd*4', 'bd bd bd [bd bd]', '[bd bd] bd bd bd'],
+      ];
+      const rockKick = [
+        ['bd ~ ~ ~ bd ~ ~ ~', 'bd ~ ~ ~ bd ~ ~ bd'],
+        ['bd ~ ~ bd bd ~ ~ ~', 'bd ~ ~ ~ bd ~ bd ~'],
+        ['bd ~ ~ bd bd ~ bd ~', 'bd ~ bd bd bd ~ ~ bd'],
+      ];
+      const metalKick = [
+        ['bd*4', 'bd ~ bd ~ bd ~ bd ~'],
+        ['bd bd ~ bd bd ~ bd ~', 'bd ~ [bd bd] ~ bd ~ [bd bd] ~'],
+        ['[bd bd] [bd bd] [bd bd] [bd bd]', 'bd*8', '[bd bd] bd [bd bd] bd [bd bd] bd [bd bd] bd'],
+      ];
+      const waveKick = [
+        ['bd ~ ~ ~ bd ~ ~ ~'],
+        ['bd ~ ~ ~ bd ~ ~ ~', 'bd ~ bd ~ bd ~ bd ~'],
+        ['bd ~ bd ~ bd ~ bd ~', 'bd ~ ~ bd bd ~ bd ~'],
+      ];
+      const kickPool = (gid === 'boomBap' || gid === 'loFi') ? boomKick
+        : gid === 'house' ? houseKick
+        : gid === 'rock' ? rockKick
+        : gid === 'metal' ? metalKick
+        : gid === 'synthwave' ? waveKick
+        : trapKick;
+      const pool = kickPool[bucket - 1] || kickPool[1];
       const pat = Rng.pick(kr, pool);
       let kick = 's("' + pat + '").gain(' + n2(0.88 + e * 0.09) + ')';
       if (bucket >= 3 && Rng.chance(kr, 0.4)) kick += '.shape(' + n2(0.1 + e * 0.18) + ')';
@@ -751,16 +820,27 @@
       ];
       const boomHats = ['hh*8', 'hh(9,16)', 'hh ~ hh hh ~ hh hh ~', 'hh ~ hh ~ hh ~ hh ~'];
       const loFiHats = ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh hh ~ hh hh ~ hh ~'];
+      // House rides the OFFBEAT open hat — that lift is the genre's signature.
+      // Rock and metal drive straight 8ths (16ths once it heats up); synthwave
+      // keeps a steady machine tick.
+      const houseHats = ['~ oh ~ oh', 'hh oh hh oh', '[hh hh] oh [hh hh] oh', '~ oh ~ [oh oh]', 'hh*8'];
+      const rockHats = ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh*16', '[hh hh] [hh hh] [hh hh] [hh hh]'];
+      const metalHats = ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh*16', 'hh(13,16)'];
+      const waveHats = ['hh*8', 'hh ~ hh ~ hh ~ hh ~'];
       let hatPool;
       if (gid === 'boomBap') hatPool = boomHats;
       else if (gid === 'loFi') hatPool = loFiHats;
+      else if (gid === 'house') hatPool = houseHats;
+      else if (gid === 'rock') hatPool = rockHats;
+      else if (gid === 'metal') hatPool = metalHats;
+      else if (gid === 'synthwave') hatPool = waveHats;
       else hatPool = trapHats;
       // low energy keeps it simple
       const actualPool = bucket <= 1 ? hatPool.slice(0, 2) : hatPool;
       const pat = Rng.pick(hr, actualPool);
       put(1, kit(swing('s("' + pat + '").gain(' + n2(0.20 + e * 0.18) + ').pan(sine.range(0.35,0.65))')));
-      // open hi-hat accent on off-beats
-      if (bucket >= 2 && Rng.chance(hr, 0.55)) {
+      // open hi-hat accent on off-beats (house already carries its own oh)
+      if (bucket >= 2 && gid !== 'house' && Rng.chance(hr, 0.55)) {
         const ohPat = Rng.pick(hr, ['~ oh ~ ~', '~ ~ oh ~', '~ oh ~ oh']);
         put(1, kit(swing('s("' + ohPat + '").gain(' + n2(0.16 + e * 0.14) + ')')));
       }
@@ -771,8 +851,37 @@
     if (on(2)) {
       const br = lrng(2);
       const isTrap = gid === 'trap' || gid === 'drill';
+      const isRiff = gid === 'rock' || gid === 'metal';
       let bass;
-      if (isTrap) {
+      if (isRiff) {
+        // Driven sawtooth riff — the guitar-adjacent low end rock and metal
+        // ride on. Metal chugs relentless 8th/16th palm-mutes; rock leaves
+        // gaps to push against. .shape() supplies the drive, and the low-pass
+        // keeps it an amp cabinet rather than a razor.
+        const riffStructs = gid === 'metal'
+          ? ['x x x x x x x x', 'x x x x x x [x x] x', '[x x] x x x [x x] x x x']
+          : ['x ~ x x ~ x x ~', 'x x ~ x x ~ x x', 'x ~ x ~ x x ~ x'];
+        bass = 'n("' + rootSeq + '").scale(' + scl(2) + ').struct("' + Rng.pick(br, riffStructs) + '")' +
+          '.sound("sawtooth").shape(' + n2(0.3 + e * 0.2) + ')' +
+          '.lpf(' + Math.round(400 + e * 500) + ').lpq(' + n2(2 + e * 4) + ')' +
+          '.gain(' + n2(0.74 + e * 0.1) + ')';
+      } else if (gid === 'house') {
+        // Rolling offbeat bass — the pump between the four-on-the-floor kicks.
+        const offStructs = ['~ x ~ x ~ x ~ x', '~ x ~ x ~ x ~ [x x]', '~ x ~ [x x] ~ x ~ x'];
+        bass = 'n("' + rootSeq + '").scale(' + scl(2) + ').struct("' + Rng.pick(br, offStructs) + '")' +
+          '.sound("' + Rng.pick(br, ['square', 'sawtooth']) + '")' +
+          '.decay(' + n2(0.18 + e * 0.1) + ').release(0.05)' +
+          '.lpf(' + Math.round(300 + e * 700) + ').lpq(' + n2(3 + e * 5) + ')' +
+          '.gain(' + n2(0.74 + e * 0.08) + ')';
+      } else if (gid === 'synthwave') {
+        // Plucky root 8ths — the sequenced anchor under the neon pads.
+        const plkStructs = ['x x x x x x x x', 'x ~ x x x ~ x x', 'x x x ~ x x x ~'];
+        bass = 'n("' + rootSeq + '").scale(' + scl(2) + ').struct("' + Rng.pick(br, plkStructs) + '")' +
+          '.sound("' + Rng.pick(br, ['sawtooth', 'square']) + '")' +
+          '.attack(0.005).decay(' + n2(0.12 + e * 0.08) + ').release(0.06)' +
+          '.lpf(' + Math.round(500 + e * 900) + ')' +
+          '.gain(' + n2(0.72 + e * 0.1) + ')';
+      } else if (isTrap) {
         // 808 character: sine with light FM for upper harmonics, long release,
         // very low filter. Pattern is sparse — the 808 holds the note.
         const structs808 = [
@@ -796,7 +905,7 @@
         // envelope glides into some notes and sits on others — always for
         // drill, sometimes for trap.
         if (gid === 'drill' || Rng.chance(br, 0.35)) {
-          const glide = Rng.pick(br, ['<0 -5 0 -3>', '<0 0 -7 0>', '<-3 0 0 -5>']);
+          const glide = Rng.pick(br, ['<0 -5 0 -3>', '<0 0 -7 0>', '<-3 0 0 -5>', '<0 -7 -5 0>', '<-5 0 -3 0>', '<0 -3 0 -7>']);
           bass += '.penv("' + glide + '").pattack(' + n2(0.1 + e * 0.08) + ')';
         }
       } else {
@@ -834,7 +943,10 @@
     // elements, snare on the third); boom bap uses the standard 2-and-4 backbeat.
     if (on(3)) {
       const cr = lrng(3);
-      const hit = Rng.chance(cr, 0.5) ? 'cp' : 'sd';
+      // Rock, metal and synthwave demand a true snare on the backbeat — a clap
+      // reads too dancey there. House keeps the classic cp/sd roll.
+      const wantSd = gid === 'rock' || gid === 'metal' || gid === 'synthwave';
+      const hit = wantSd ? 'sd' : Rng.chance(cr, 0.5) ? 'cp' : 'sd';
       let pat;
       if (gid === 'trap' || gid === 'drill') {
         // Half-time: snare on beat 3 = 4 elements, each one beat, third is the hit
@@ -842,6 +954,15 @@
           '~ ~ ' + hit + ' ~',
           '~ ~ [' + hit + ' ' + hit + '] ~',
           '~ ~ ' + hit + ' [~ ' + hit + ']',
+        ]);
+      } else if ((gid === 'metal' || gid === 'rock') && bucket >= 3) {
+        // High-energy metal/rock: the kick has gone double-time, so the snare
+        // matches it with a driving/blast feel instead of a plain 2&4 (E-14).
+        pat = Rng.pick(cr, [
+          '~ ' + hit + ' ~ ' + hit + ' ~ ' + hit + ' ~ ' + hit,   // straight 8th backbeat drive
+          hit + '*8',                                              // blast-beat snare
+          '~ ' + hit + ' [' + hit + ' ' + hit + '] ' + hit,       // filled backbeat
+          '[' + hit + ' ' + hit + '] ' + hit + ' [' + hit + ' ' + hit + '] ' + hit,
         ]);
       } else {
         // Standard backbeat: beats 2 and 4
@@ -867,22 +988,50 @@
       // colours; boom bap sits in sixths and stacked fourths; trap/drill keep
       // stabs tighter (triad / sus / shell) but still vary. Every voicing stays
       // inside the scale, so the mood palette keeps dictating the colour.
-      const voicingsFor = (gid === 'rb' || gid === 'loFi')
+      // Rock and metal stack power chords — root, fifth, octave — the wall.
+      const voicingsFor = (gid === 'rock' || gid === 'metal')
+        ? ['power', 'sus4', 'triad']
+        : (gid === 'rb' || gid === 'loFi')
         ? ['seventh', 'ninth', 'sixth', 'quartal', 'shell']
         : gid === 'boomBap'
         ? ['sixth', 'seventh', 'quartal', 'triad', 'spread']
         : ['triad', 'sus4', 'shell', 'seventh', 'quartal'];
-      const seq = Theory.voicingSeq(s.prog, Rng.pick(chr, voicingsFor));
-      const voice = Rng.int(chr, 0, 2);
+      // Pentatonic (5-note) scales need capped extensions or the wide voicings
+      // blow out ~1.8 octaves — pass the flag through to Theory.voicing (E-18).
+      const penta = scale.indexOf('pentatonic') >= 0;
+      // Usually one voicing colours the whole loop; ~30% of the time (rolled on
+      // the chord rng, so it's stable per variant) pick a voicing PER degree for
+      // a richer, less-uniform harmony (E-10). Both paths stay paren-balanced.
+      let seq;
+      if (s.prog.length > 1 && Rng.chance(chr, 0.3)) {
+        seq = '<' + s.prog.map((d) => {
+          const v = Rng.pick(chr, voicingsFor);
+          return '[' + Theory.voicing(v, d, penta).join(',') + ']';
+        }).join(' ') + '>';
+      } else {
+        seq = Theory.voicingSeq(s.prog, Rng.pick(chr, voicingsFor), penta);
+      }
+      let voice = Rng.int(chr, 0, 2);
+      // Rock/metal always hit the driven stab, house lives on the piano stab,
+      // and synthwave leans hard into the lush pad.
+      if (gid === 'rock' || gid === 'metal' || gid === 'house') voice = 0;
+      else if (gid === 'synthwave' && voice !== 1 && Rng.chance(chr, 0.75)) voice = 1;
       let chord;
       if (voice === 0) {
         // Piano stab: hard transient, short tail — punchy trap chord hit
-        const stabPat = Rng.pick(chr, ['x ~ ~ ~', 'x ~ x ~', 'x ~ ~ x', 'x x ~ ~', 'x ~ x x', '~ x ~ x']);
+        // rock/metal strum the stab across the bar; house rides the offbeat
+        const stabPat = (gid === 'rock' || gid === 'metal')
+          ? Rng.pick(chr, ['x ~ x ~', 'x x ~ x', 'x ~ [x x] ~', 'x ~ x x'])
+          : gid === 'house'
+          ? Rng.pick(chr, ['~ x ~ x', '~ x ~ [x x]', '~ [~ x] ~ x'])
+          : Rng.pick(chr, ['x ~ ~ ~', 'x ~ x ~', 'x ~ ~ x', 'x x ~ ~', 'x ~ x x', '~ x ~ x']);
         chord = 'n("' + seq + '").scale(' + scl(3) + ')' +
           '.struct("' + stabPat + '")' +
-          '.sound("sawtooth").lpf(' + Math.round(1800 + e * 1200) + ')' +
+          '.sound("sawtooth").lpf(' + Math.round(gid === 'house' ? 1200 + e * 900 : 1800 + e * 1200) + ')' +
           '.attack(0.005).decay(' + n2(0.12 + e * 0.15) + ').release(0.08)' +
           '.gain(' + n2(0.28 + e * 0.12) + ').room(0.22)';
+        // a touch of drive turns the stab into a power-chord strum
+        if (gid === 'rock' || gid === 'metal') chord += '.shape(' + n2(0.15 + e * 0.15) + ')';
       } else if (voice === 1) {
         // Lush pad: slow swell, triangle or sine — R&B / lo-fi / atmospheric
         const wave = Rng.pick(chr, ['triangle', 'sine']);
@@ -908,37 +1057,47 @@
     // variant), so every one of the ~45 cells + 16 call/response phrases is
     // reachable — the old code indexed MELODY_CELLS by variant directly, and a
     // fresh add only ever seeds variant 0..5, so just the first six cells were
-    // ever heard. Register lifts to octave 6 when it's bright/energetic; half
-    // the time it plays a two-bar call-and-response instead of one motif.
+    // ever heard. Register lifts to octave 6 when it's bright/energetic; most
+    // of the time it plays a two-bar call-and-response instead of one motif.
     if (on(5)) {
       const lr = lrng(5);
-      const bright = gid === 'rb' || gid === 'loFi' || gid === 'boomBap';
-      const oct = ((e > 0.6 && Rng.chance(lr, 0.5)) || (bright && Rng.chance(lr, 0.3))) ? 6 : 5;
+      const bright = gid === 'rb' || gid === 'loFi' || gid === 'boomBap' || gid === 'synthwave';
+      // Boom-bap toplines sit mid-register, so it's excluded from the octave-6
+      // lift even though it's a "bright" genre for phrasing/swing purposes (E-17).
+      const octLift = gid === 'rb' || gid === 'loFi' || gid === 'synthwave';
+      const oct = ((e > 0.6 && Rng.chance(lr, 0.5)) || (octLift && Rng.chance(lr, gid === 'synthwave' ? 0.6 : 0.3))) ? 6 : 5;
       // phrase vs single cell: a call-and-response answers itself each cycle
       let seq;
-      if (Theory.MELODY_PHRASES && Theory.MELODY_PHRASES.length && Rng.chance(lr, 0.5)) {
+      if (Theory.MELODY_PHRASES && Theory.MELODY_PHRASES.length && Rng.chance(lr, 0.65)) {
         const ph = Rng.pick(lr, Theory.MELODY_PHRASES);
         seq = '<[' + ph[0] + '] [' + ph[1] + ']>';
       } else {
         seq = Rng.pick(lr, Theory.MELODY_CELLS);
       }
-      const wave = Rng.pick(lr, ['triangle', 'sawtooth', 'square']);
+      // rock and metal want the saw's bite; everyone else rolls the wave
+      const wave = (gid === 'rock' || gid === 'metal')
+        ? 'sawtooth'
+        : Rng.pick(lr, ['triangle', 'sawtooth', 'square']);
       let lead = 'n("' + seq + '").scale(' + scl(oct) + ').sound("' + wave + '")';
       if (Rng.chance(lr, 0.4)) lead += '.fm(' + n2(1 + e * 3) + ').fmh(' + Rng.int(lr, 1, 3) + ')';
       // always filtered — an unfiltered sawtooth up here is piercing
       lead += '.lpf(' + Math.round(1500 + e * 2800) + ')';
       lead += '.gain(' + n2(0.3 + e * 0.14) + ').room(0.3)';
+      // a touch of drive keeps the rock/metal lead singing over the riff
+      if (gid === 'rock' || gid === 'metal') lead += '.shape(' + n2(0.1 + e * 0.12) + ')';
       // genre phrasing colour: drill slides between notes, boom bap / lo-fi
       // leads swing behind the beat, trap leans on a dotted-8th delay echo.
       if (gid === 'drill' && Rng.chance(lr, 0.6)) {
-        lead += '.penv("' + Rng.pick(lr, ['<0 -2 0 -1>', '<0 0 -2 0>', '<-1 0 -2 0>']) + '").pattack(0.06)';
+        lead += '.penv("' + Rng.pick(lr, ['<0 -2 0 -1>', '<0 0 -2 0>', '<-1 0 -2 0>', '<0 -1 -2 0>', '<-2 0 -1 0>', '<0 -2 -1 0>']) + '").pattack(0.06)';
       }
       if (bright && (gid === 'boomBap' || gid === 'loFi')) lead += '.swingBy(1/6,8)';
-      if (e > 0.55) {
+      if (e > 0.55 || gid === 'synthwave') { // synthwave always carries the echo
         const dt = (gid === 'trap' || gid === 'drill') ? '0.125' : '0.1875';
         lead += '.delay(0.35).delaytime(' + dt + ').delayfeedback(' + n2(0.3 + e * 0.1) + ')';
       }
-      if (e < 0.35) lead += '.degradeBy(0.3)';
+      // house keeps its leads sparse — the groove is the star, not the topline
+      if (gid === 'house' && e < 0.55) lead += '.degradeBy(' + n2(clamp(0.3 + (0.55 - e), 0, 0.7)) + ')';
+      else if (e < 0.35) lead += '.degradeBy(0.3)';
       if (Rng.chance(lr, 0.25)) lead += '.crush(' + Rng.int(lr, 6, 12) + ')';
       put(5, lead);
     }
@@ -959,7 +1118,7 @@
       } else if (atmoVoice === 1) {
         put(6,
           'n("' + rootSeq + '").scale(' + scl(5) + ')' +
-          '.sound("sine").slow(2).gain(0.1).lpf(1000).room(0.7)'
+          '.sound("sine").slow(2).gain(' + n2(0.08 + e * 0.05) + ').lpf(' + Math.round(800 + e * 600) + ').room(0.7)'
         );
       } else {
         // Choir shimmer: triangle 7th chord, slow swell, high room
@@ -1137,8 +1296,8 @@
       scaleType: s.scaleType,
       bpm: s.bpm,
       cps: s.cps,
-      genre: s.genre ? s.genre.id : 'trap',
-      genreLabel: s.genre ? s.genre.label : 'Trap',
+      genre: s.genre ? s.genre.id : null, // null (not 'trap') so callers can detect an uninitialised genre (E-22)
+      genreLabel: s.genre ? s.genre.label : null,
       stage: highestActive(g),
       maxStage: MAX_STAGE,
       stageLabel: STAGES[highestActive(g)].label,
@@ -1191,12 +1350,15 @@
     const r = s.rng;
     if (!s.banned) s.banned = {};
     if (!s.vtabu) s.vtabu = {};
-    s.vprop = (s.vprop || 0) + 1;
     const snapshot = cloneGenome(g);
     const intent = s.intent || 0;      // density dial (0 until the UI sets it)
     const lm = s.laneMood || [];       // part-mixer opinion: <0 drop, >0 feature
     const likes = (i) => (lm[i] || 0) > 0.3;
-    const dislikes = (i) => (lm[i] || 0) < -0.3;
+    // A lane whose *drop* the human has banned is being kept on purpose, so it
+    // no longer counts as "disliked" for deepening — it becomes a normal
+    // reshape/FX/double candidate again instead of being frozen out (E-5).
+    const keepBanned = (i) => !!(s.banned && s.banned['drop:' + i]);
+    const dislikes = (i) => (lm[i] || 0) < -0.3 && !keepBanned(i);
     const act = activeCount(g);
 
     // Build the candidate moves. Adds bring the skeleton in first; once three
@@ -1214,7 +1376,9 @@
     // The bassline is the arrangement's spine, so it's weighted well ahead of
     // the decorative lanes (trap/drill open with it already seeded in).
     inactiveIdxs(g).forEach((i) => {
-      if (s.banned['add:' + i] || dislikes(i)) return;
+      // An explicit feature (part-mixer "feature this lane") overrides a prior
+      // ban: the human has changed their mind, so re-admit it as a candidate (E-6).
+      if ((s.banned['add:' + i] && !likes(i)) || dislikes(i)) return;
       const spine = i === 2 ? 2.5 : 1;
       cands.push({ kind: 'add', layer: i, dir: 1, w: 3 * more * spine * (likes(i) ? 2.5 : 1), banKey: 'add:' + i, desc: 'bring in ' + STAGES[i].label });
     });
@@ -1251,9 +1415,15 @@
     }
     if (!cands.length) { s.pending = null; return null; }
 
-    // Soft spacing: prefer candidates whose lane wasn't just touched; relax only
-    // if that would leave nothing, so there's always a move.
-    const free = (c) => (s.vtabu[c.layer] || 0) <= s.vprop;
+    // Only now that we know a move exists do we advance the proposal clock — an
+    // empty turn mustn't tick the vtabu spacing forward (E-7).
+    s.vprop = (s.vprop || 0) + 1;
+
+    // Soft spacing: prefer moves of the same kind+lane that weren't just
+    // touched; relax only if that would leave nothing, so there's always a move.
+    // Keying by kind+lane (not lane alone) means a rejected reshape only spaces
+    // out further reworks on that lane, not its FX/add/double moves (E-8).
+    const free = (c) => (s.vtabu[c.kind + ':' + c.layer] || 0) <= s.vprop;
     let pool = cands.filter(free);
     if (!pool.length) pool = cands;
 
@@ -1272,21 +1442,22 @@
       g.double[pick.layer] = true;
     } else if (pick.kind === 'fill') {
       g.fill = Rng.int(r, 1, 3);
-      pick.desc = 'drop in ' + FILL_NAMES[g.fill];
+      pick.desc = g.fill ? 'drop in ' + FILL_NAMES[g.fill] : 'drop in a fill';
     }
-    s.vtabu[pick.layer] = s.vprop + 2; // hold this lane out of the next couple of pitches
+    s.vtabu[pick.kind + ':' + pick.layer] = s.vprop + 2; // hold this move (kind+lane) out of the next couple of pitches
     s.pending = { snapshot: snapshot, desc: pick.desc, layer: pick.layer, dir: pick.dir, kind: pick.kind, banKey: pick.banKey };
     return { desc: pick.desc, layer: pick.layer, dir: pick.dir, kind: pick.kind };
   };
 
-  // Keep the pitched change (it's already applied). Returns the change.
+  // Keep the pitched change (it's already applied). Returns the uniform change
+  // shape { desc, layer, kind, dir } (internal snapshot/banKey omitted — E-20).
   DJEngine.prototype.acceptChange = function () {
     const s = this.song;
     if (!s.pending) return null;
     const p = s.pending;
     s.pending = null;
     (s.voteLog = s.voteLog || []).push({ v: 'up', desc: p.desc });
-    return p;
+    return { desc: p.desc, layer: p.layer, kind: p.kind, dir: p.dir };
   };
 
   // Kill the pitched change: revert the genome and ban this idea for the song.
@@ -1298,23 +1469,26 @@
     if (!s.banned) s.banned = {};
     if (!s.vtabu) s.vtabu = {};
     if (p.kind === 'reshape') {
-      s.vtabu[p.layer] = (s.vprop || 0) + 3; // a killed rework: try a different idea before this lane again
+      s.vtabu['reshape:' + p.layer] = (s.vprop || 0) + 3; // a killed rework: space out further reworks on this lane (E-8)
     } else {
       s.banned[p.banKey] = true;             // a killed add / FX / double / fill stays out for the song
     }
     s.pending = null;
     (s.voteLog = s.voteLog || []).push({ v: 'down', desc: p.desc });
-    return p;
+    return { desc: p.desc, layer: p.layer, kind: p.kind, dir: p.dir };
   };
 
   // ---- A&R, redesigned: opinion at component grain, not whole-track pass/fail
   // The keep/kill card is gone; the human's seven per-lane sliders (s.laneMood)
   // are the feedback. Each step the DJ acts on the strongest opinion; with no
   // strong opinion it makes a small neutral move so the track keeps breathing.
-  // Returns { desc } — A&R never reverts, so there's no snapshot to keep.
+  // Returns { desc, layer, kind, dir } — A&R never reverts, so there's no snapshot to keep.
   DJEngine.prototype.steerStep = function () {
     const s = this.song;
     if (!s) return null;
+    // Uniform shape { desc, layer, kind, dir } (E-20); layer/kind/dir stay null
+    // for opinion-driven moves whose target steerByOpinion doesn't report back.
+    let layer = null, kind = null, dir = null;
     let desc = steerByOpinion(s);
     if (!desc) {
       const g = s.genome, r = s.rng;
@@ -1324,14 +1498,15 @@
         const i = inact[0];
         g.active[i] = true; g.variant[i] = Rng.int(r, 0, 5); s.lastAdded = i;
         desc = '➕ building — brought in ' + STAGES[i].label;
+        layer = i; kind = 'add'; dir = 1;
       } else {
         const d = droppableIdxs(g);
-        if (d.length) { const i = Rng.pick(r, d); g.variant[i] += 1 + Rng.int(r, 0, 2); desc = '🔀 idling — reworked ' + STAGES[i].label; }
+        if (d.length) { const i = Rng.pick(r, d); g.variant[i] += 1 + Rng.int(r, 0, 2); desc = '🔀 idling — reworked ' + STAGES[i].label; layer = i; kind = 'reshape'; dir = 0; }
         else desc = 'holding on the kick';
       }
     }
     s.pending = null;
-    return { desc: desc };
+    return { desc: desc, layer: layer, kind: kind, dir: dir };
   };
 
   SDJ.DJEngine = DJEngine;

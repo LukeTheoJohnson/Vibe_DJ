@@ -1,6 +1,6 @@
 # SPIKE E — "Teach, Don't Tune"
 
-**A devil's-advocate ML spike for Strudel Auto-DJ.**
+**A devil's-advocate ML spike for Vibe DJ.**
 Stance: the human should *demonstrate* taste, not *dial* it. The machine tunes its own
 hyperparameters toward the listener. One of five spikes, deliberately contrarian.
 
