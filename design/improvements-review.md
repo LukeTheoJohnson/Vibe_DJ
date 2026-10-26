@@ -1,4 +1,4 @@
-# Acetate — Improvements Review
+# Vibe DJ — Improvements Review
 
 A curated audit of the whole app, grouped by feature area. Every item is a **small-to-medium, localised fix — no rewrites**. Line numbers verified against the working tree on the `integrate/features` branch (2026-07-30).
 

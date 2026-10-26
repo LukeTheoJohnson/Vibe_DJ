@@ -1,16 +1,17 @@
-# CLAUDE.md — Acetate
+# CLAUDE.md — Vibe DJ
 
 Guidance for working in this repo. Keep it current when architecture changes.
 
 ## What this is
 
-A **static, build-free browser app** called **Acetate**: an AI DJ that cuts tracks live in Strudel code,
+A **static, build-free browser app** called **Vibe DJ**: an AI DJ that cuts tracks live in Strudel code,
 steered turn-by-turn from a two-turntable deck rig. Every track is a record being cut —
 approved parts press coloured rings onto the disc, saving "presses" it into the crate.
 No backend, no framework, no bundler. Strudel is loaded from a CDN and exposes
 `initStrudel`, `evaluate`, `hush` (plus all pattern functions) as globals.
 
-**Naming/vocabulary (renamed 2026-07):** the project is **Acetate**. UI copy calls the
+**Naming/vocabulary (renamed 2026-07, rebranded 2026-10):** the project is **Vibe DJ**
+(formerly Acetate). UI copy calls the
 save verb **cut** and a saved record a **dubplate** (a one-off acetate cut); the render
 engine (`dj.js`) is conceptually the **lathe**. Code and the `SDJ.*` API keep their
 existing identifiers — `press`/`pressModal`/`openPress`/`renderCommitted`/`render` and the

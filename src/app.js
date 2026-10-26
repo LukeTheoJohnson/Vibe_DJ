@@ -1459,7 +1459,7 @@
       // uses double quotes today, but a hand-edited/imported record might not
       const mc = s.match(/\.color\(\s*['"](#[0-9a-fA-F]{3,8})['"]\s*\)/);
       if (!mc && s.indexOf('.color(') >= 0) {
-        console.debug('[acetate] splitStack: .color( present but did not match the colour pattern:', s.slice(0, 80));
+        console.debug('[vibe-dj] splitStack: .color( present but did not match the colour pattern:', s.slice(0, 80));
       }
       return { code: s, colour: mc ? mc[1].toLowerCase() : null };
     }).filter(Boolean);
@@ -2467,7 +2467,7 @@
   // The on-screen DJ-moves list is gone — the narration now rides the console
   // so the ~20 call sites (and their story) survive for debugging.
   function logEvent(text) {
-    console.debug('[acetate]', text);
+    console.debug('[vibe-dj]', text);
   }
   function clearLog() { /* no list to wipe any more */ }
 
