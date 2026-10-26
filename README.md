@@ -8,7 +8,7 @@ is a **record being cut**: each part you approve presses a coloured groove-ring 
 disc spinning on Deck A, and when you keep one it’s a **dubplate** — a one-off cut, its
 name and colours stuck, dropped into your crate for good.
 
-**[▶ Play it live](https://luketheojohnson.github.io/acetate/)** &nbsp;·&nbsp;
+**[▶ Play it live](https://luketheojohnson.github.io/Vibe_DJ/)** &nbsp;·&nbsp;
 No backend · no framework · no bundler · no build step &nbsp;·&nbsp; MIT-licensed
 
 > *You bring the vibe; the DJ writes every note. Pitches arrive as **acetates** — the
