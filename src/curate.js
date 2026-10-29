@@ -7,7 +7,7 @@
 
   const has = Object.prototype.hasOwnProperty;
 
-  // Lane lexicon — indices match SDJ.STAGES (kick hats bass clap chords lead air).
+  // Lane lexicon — indices match SDJ.STAGES (kick hats bass clap chords lead air vocal).
   const LANE_WORDS = {
     kick: 0, kicks: 0, drum: 0, drums: 0,
     hat: 1, hats: 1, hihat: 1, hihats: 1,
@@ -16,9 +16,10 @@
     chord: 4, chords: 4, keys: 4, pad: 4, pads: 4, harmony: 4,
     lead: 5, melody: 5, hook: 5, riff: 5,
     air: 6, atmosphere: 6, ambience: 6, atmos: 6,
+    vocal: 7, vocals: 7, voice: 7, voices: 7, singing: 7, singer: 7, lyrics: 7,
   };
   // short display names for the chips ("no hi-hats", "more bass")
-  const LANE_NAMES = ['kick', 'hi-hats', 'bass', 'clap', 'chords', 'lead', 'air'];
+  const LANE_NAMES = ['kick', 'hi-hats', 'bass', 'clap', 'chords', 'lead', 'air', 'vocals'];
 
   // Hard bans — the lane comes off the record now. "less" is NOT here: it is a
   // soft de-emphasis (see SOFTEN), and "drop" is dropped from the hard set (DJ
@@ -94,16 +95,29 @@
       .filter((c) => c.length);
   }
 
-  // parse(text) → { bans, features, soften, mood, tempo, density, genre, chips }.
+  // "sing: <words>" — the words the vocal sings, up to the next comma/semicolon.
+  // Pulled out BEFORE tokenising so the sung words can't also read as
+  // directives ("sing: more bass" sings it, it doesn't feature the bass).
+  // The words pass through the lyric sanitiser; null if nothing singable is left.
+  const SING_RE = /\bsing\s*:\s*([^,;\n]*)/i;
+
+  // parse(text) → { bans, features, soften, mood, tempo, density, genre, sing, chips }.
   // bans/features/soften are lane indices; mood is 'dark'|'bright'|null; tempo is
   // 'fast'|'slow'|a bpm number|null; density is -1|1|null; genre is a
   // Theory.GENRES id|null. chips lists every understood directive as
   // { label, kind } — unmatched words produce nothing at all.
   function parse(text) {
-    const out = { bans: [], features: [], soften: [], mood: null, tempo: null, density: null, genre: null, chips: [] };
+    const out = { bans: [], features: [], soften: [], mood: null, tempo: null, density: null, genre: null, sing: null, chips: [] };
     const genres = genreLexicon();
     const chip = (label, kind, lane) => out.chips.push(
       lane == null ? { label: label, kind: kind } : { label: label, kind: kind, lane: lane });
+
+    const sung = SING_RE.exec(String(text || ''));
+    if (sung) {
+      text = String(text).replace(SING_RE, ' ');
+      out.sing = SDJ.Lyrics ? SDJ.Lyrics.sanitise(sung[1]) : null;
+      if (out.sing) chip('sing “' + out.sing.replace(/_/g, ' ') + '”', 'sing', 7);
+    }
 
     tokenise(text).forEach((toks) => {
       let pending = null; // 'ban' | 'soften' | 'feature', carried until a lane word lands

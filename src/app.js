@@ -127,7 +127,7 @@
     if (el.undoBtn) el.undoBtn.addEventListener('click', liveUndo);
     if (el.autoBtn) el.autoBtn.addEventListener('click', () => setAuto(!autoRun));
     if (el.codeOpen) el.codeOpen.addEventListener('click', () => {
-      if (engine.song) openInStrudel(engine.renderCommitted());
+      if (engine.song) openInStrudel(withVocalLoads(engine.renderCommitted()));
     });
     // set history: a kept row's ↶ goes back to the track as it was there
     if (el.djFeed) el.djFeed.addEventListener('click', (e) => {
@@ -274,6 +274,7 @@
   function freshTrack(reason) {
     engine.newSong();
     engine.voteReset();      // clear the per-song ban / tabu the pitcher uses
+    engine.song.vocalsOffline = vocalsOffline;
     resetControls();         // neutral board — parts on auto, density held
     resetMind();
     saveCooldown = 0;
@@ -802,6 +803,8 @@
   // nowPlaying is the single source of truth the header transport renders.
 
   function play(code, kind, name) {
+    lastPlayedCode = code;
+    registerVocals(code, () => { if (lastPlayedCode === code) play(code, kind, name); });
     if (typeof window.evaluate === 'function') {
       cancelSilence(); // a new source releases any stop-enforcement window
       if (nowPlaying.kind && nowPlaying.kind !== kind && typeof window.hush === 'function') {
@@ -822,6 +825,51 @@
       }
     }
     setNowPlaying(kind, name);
+  }
+
+  // ---- vocals: register each lyric line with Shabda before it sounds ----
+  // A vocal is s("<line>") — a sample Shabda's text-to-speech makes on demand.
+  // Strudel only knows the name once samples('shabda/speech:…') has resolved,
+  // so new lines are registered as they first appear in a program, and the
+  // program is evaluated again once they land (otherwise the first pass of a
+  // fresh vocal is silent). If Shabda can't be reached the session carries on
+  // instrumental: no more vocal pitches, and a chip says why.
+  const VOCAL_TIMEOUT_MS = 15000;
+  const vocalNames = new Set(); // lines registered (or in flight) this session
+  let vocalsOffline = false;
+  let lastPlayedCode = '';
+
+  function registerVocals(code, replay) {
+    if (vocalsOffline || !SDJ.Lyrics || typeof window.samples !== 'function') return false;
+    const fresh = SDJ.Lyrics.namesIn(code).filter((n) => !vocalNames.has(n));
+    if (!fresh.length) return false;
+    fresh.forEach((n) => vocalNames.add(n));
+    const timeout = new Promise((res, rej) => setTimeout(() => rej(new Error('Shabda timed out')), VOCAL_TIMEOUT_MS));
+    let load;
+    try { load = Promise.resolve(window.samples('shabda/speech:' + fresh.join(','))); } catch (e) { load = Promise.reject(e); }
+    Promise.race([load, timeout]).then(
+      () => { if (replay) replay(); },
+      (err) => {
+        console.warn('vocals unavailable:', err);
+        fresh.forEach((n) => vocalNames.delete(n));
+        markVocalsOffline();
+      }
+    );
+    return true;
+  }
+
+  function markVocalsOffline() {
+    if (vocalsOffline) return;
+    vocalsOffline = true;
+    if (engine.song) engine.song.vocalsOffline = true;
+    flashChip('vocals offline — Shabda unreachable', 'ban');
+  }
+
+  // Strudel code to open elsewhere (strudel.cc): the Shabda load lines go on
+  // top so the vocal resolves there too.
+  function withVocalLoads(code) {
+    const names = SDJ.Lyrics ? SDJ.Lyrics.namesIn(code) : [];
+    return names.length ? names.map(SDJ.Lyrics.loadLine).join('\n') + '\n' + code : code;
   }
 
   // A render that fails to evaluate must never fail silently — that's exactly how
@@ -1386,7 +1434,7 @@
       const entry = loadCrate()[crateIndexById(id)];
       if (!entry) return;
       if (act === 'share') copyText(shareUrl(entry), btn);
-      else openInStrudel(entry.loopCode || entry.code);
+      else openInStrudel(withVocalLoads(entry.loopCode || entry.code));
     }
     else if (act === 'rename') renameTrack(id);
     else if (act === 'del') deleteTrack(id);
@@ -2343,7 +2391,7 @@
   // and the density dial sets how busy the arrangement should get.
 
   let intentIn = 0;   // -1..1, density dial (strip <-> pile on)
-  const laneMoodIn = [0, 0, 0, 0, 0, 0, 0]; // -1..1 per lane: drop / auto / feature
+  const laneMoodIn = (SDJ.STAGES || []).map(() => 0); // -1..1 per lane: drop / auto / feature
 
   // Push the current per-lane opinion + density onto the live song so the next
   // proposeChange() reads them.
@@ -2479,6 +2527,7 @@
   let curOpinionSet = {};    // lane -> true where curation set the opinion (so clearing resets it)
   let curDensitySet = false; // curation moved the density dial
   let curGenrePin = null;    // genre id curation pinned (unpinned when the text drops it)
+  let curSingSet = false;    // curation set the song's sung words (cleared when the text drops them)
   let curLiveApplied = { mood: null, tempo: null }; // last mood/tempo applied live
   let curDebounce = 0;
 
@@ -2591,6 +2640,26 @@
         acted.changed = true;
       });
     }
+    // "sing: <words>" — the vocal sings these instead of the DJ's line, and
+    // comes in if it's out. Clearing the words hands the line back to the DJ.
+    if (engine.song && d) {
+      const s = engine.song;
+      const vi = SDJ.VOCAL_IDX;
+      if (d.sing) {
+        if (s.lyric !== d.sing) { s.lyric = d.sing; acted.changed = true; }
+        if (!s.genome.active[vi]) {
+          s.genome.active[vi] = true;
+          if (s.pending && s.pending.snapshot) s.pending.snapshot.active[vi] = true;
+          acted.changed = true;
+        }
+        acted.notes.sing = s.lyric ? 'now singing' : null;
+        curSingSet = true;
+      } else if (curSingSet) {
+        s.lyric = null;
+        curSingSet = false;
+        acted.changed = true;
+      }
+    }
     curOpinionSet = set;
     if (d && d.density != null) {
       SDJ.setDensity(d.density * 0.7); curDensitySet = true;
@@ -2662,6 +2731,7 @@
       else if (c.kind === 'tempo') note = notes.tempo;
       else if (c.kind === 'density') note = notes.density;
       else if (c.kind === 'genre') note = notes.genre;
+      else if (c.kind === 'sing') note = notes.sing;
       span.textContent = c.label + (note ? ' — ' + note : '');
       el.curateChips.appendChild(span);
     });
@@ -3016,6 +3086,12 @@
     strudel: strudelUrl,      // (code) → strudel.cc URL
   };
   SDJ.demoRecords = buildDemos; // the first-visit demo records (fresh copies)
+  // vocals (agent-native): the current line, and whether Shabda is reachable
+  SDJ.vocals = {
+    line: function () { return engine.song ? engine.vocalLine() : null; },
+    offline: function () { return vocalsOffline; },
+    exportCode: withVocalLoads, // (code) → code with the Shabda load lines on top
+  };
   // the A/B crossfader (agent-native): blend the pitch against the committed
   // track. set() returns whether the mix was audible (there was a pitch to blend).
   SDJ.ab = {

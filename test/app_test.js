@@ -34,7 +34,7 @@ window.localStorage.setItem('sdj.crate', JSON.stringify([
 ]));
 
 // ---- load app modules in the window context ----
-for (const f of ['rng', 'theory', 'names', 'dj', 'curate', 'log', 'art', 'vinyl', 'visualiser', 'menu', 'app']) {
+for (const f of ['rng', 'theory', 'names', 'lyrics', 'dj', 'curate', 'log', 'art', 'vinyl', 'visualiser', 'menu', 'app']) {
   try {
     window.eval(fs.readFileSync(path.join(root, 'src', f + '.js'), 'utf8'));
   } catch (e) {
@@ -115,7 +115,8 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
   check('track name populated', doc.getElementById('trackName').textContent !== '—');
   check('code panel populated', doc.getElementById('code').textContent.includes('stack'));
   check('code highlighted with spans', doc.getElementById('code').innerHTML.includes('<span class="fn"'));
-  check('stage chips rendered', doc.querySelectorAll('#stageChips .chip').length === 7);
+  check('stage chips rendered (one per part, vocal included)',
+    doc.querySelectorAll('#stageChips .chip').length === window.SDJ.STAGES.length && window.SDJ.STAGES.length === 8);
   // part steer: the part chips are buttons — a click cycles DJ decides → feature → drop
   const partChip = doc.querySelectorAll('#stageChips .chip')[1];
   partChip.click();
@@ -648,6 +649,45 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
     window.SDJ.live.auto(false);
     check('turning Let it run off clears the countdown', doc.getElementById('autoNote').hidden);
   }
+  // ---- vocals in the live set: Shabda registration, sing:, offline ----
+  const shabdaCalls = [];
+  let shabdaFails = false;
+  window.samples = (src) => { shabdaCalls.push(src); return shabdaFails ? Promise.reject(new Error('offline')) : Promise.resolve(); };
+  if (!window.SDJ.live.pitching()) { await window.SDJ.live.start(); await sleep(20); }
+  window.SDJ.curate.set('sing: hello world');
+  await sleep(20);
+  check('sing: puts your words on the vocal and brings it in',
+    window.SDJ.vocals.line() === 'hello_world' && window.SDJ.engine.song.genome.active[window.SDJ.VOCAL_IDX] === true);
+  check('the sung line is registered with Shabda before it plays',
+    shabdaCalls.indexOf('shabda/speech:hello_world') >= 0, shabdaCalls.join(' | '));
+  check('the sing receipt chip says what it is singing',
+    Array.from(doc.querySelectorAll('#curateChips .curate-chip')).some((c) => /hello world/.test(c.textContent)));
+  const callsAfterSing = shabdaCalls.length;
+  window.SDJ.ab.set(0); window.SDJ.ab.set(1);
+  await sleep(10);
+  check('a line already registered is not fetched again', shabdaCalls.length === callsAfterSing);
+  check('Open in Strudel code loads the vocal from Shabda first',
+    window.SDJ.vocals.exportCode(window.SDJ.engine.render()).indexOf("samples('shabda/speech:hello_world')") === 0);
+  const vocalShare = window.SDJ.share.link({ params: window.SDJ.DJEngine.songParams(window.SDJ.engine.song, window.SDJ.engine.song.genome), code: '' });
+  const vocalSent = JSON.parse(Buffer.from(decodeURIComponent(vocalShare.split('#play=')[1]), 'base64').toString('utf8'));
+  const vShareEng = new window.SDJ.DJEngine();
+  check('a share link carries the sung words', !!vShareEng.loadSong(vocalSent.p) && vShareEng.song.lyric === 'hello_world' &&
+    vShareEng.render().includes('s("hello_world")'));
+  vocalSent.p.lyric = 'hello_world").fetch("evil';
+  check('a share link with unsanitised words is refused', new window.SDJ.DJEngine().loadSong(vocalSent.p) === null);
+  window.SDJ.curate.set('no vocals');
+  await sleep(20);
+  check('"no vocals" takes the vocal off the record',
+    window.SDJ.engine.song.genome.active[window.SDJ.VOCAL_IDX] === false && window.SDJ.engine.vocalLine() !== 'hello_world');
+  shabdaFails = true;
+  window.SDJ.curate.set('sing: lost signal');
+  await sleep(30);
+  check('when Shabda is unreachable the set goes on without vocals',
+    window.SDJ.vocals.offline() === true && window.SDJ.engine.song.vocalsOffline === true &&
+    Array.from(doc.querySelectorAll('#curateChips .curate-chip')).some((c) => /vocals offline/.test(c.textContent)));
+  window.SDJ.curate.clear();
+  delete window.samples;
+
   window.location.hash = '';
   await sleep(10);
 
@@ -859,11 +899,71 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
   check('demo records are deterministic',
     JSON.stringify(window.SDJ.demoRecords().map((d) => d.code)) === JSON.stringify(demos.map((d) => d.code)));
 
+  // ---- vocals: lyrics, the vocal lane, old records ----
+  const Ly = window.SDJ.Lyrics;
+  check('lyric lines are seeded: same seed + variant, same words; a new variant, new words',
+    Ly.line(7, 3, 'dreamy') === Ly.line(7, 3, 'dreamy') && Ly.line(7, 3, 'dreamy') !== Ly.line(7, 4, 'dreamy'));
+  let lyricsSafe = true;
+  for (const mood of Object.keys(Ly.BANKS)) for (let v = 0; v < 40; v++) {
+    const l = Ly.line(1234, v, mood);
+    if (!/^[a-z0-9]+(_[a-z0-9]+)+$/.test(l) || Ly.sanitise(l) !== l) lyricsSafe = false;
+  }
+  check('every generated line is 2+ safe words', lyricsSafe);
+  check('the sanitiser strips code and refuses one-word lines',
+    Ly.sanitise('Hello, World!') === 'hello_world' && Ly.sanitise('`${x}` ") ;') === null &&
+    Ly.sanitise('hey') === null && Ly.sanitise(Array(20).fill('word').join(' ')).split('_').length <= 6);
+
+  const vx = new window.SDJ.DJEngine();
+  vx.masterSeed = 0x5eed; vx.newSong(); vx.voteReset();
+  let vocalEarly = false, vocalAt = null;
+  for (let k = 0; k < 60 && vocalAt == null; k++) {
+    const p = vx.proposeChange();
+    if (!p) break;
+    if (p.layer === window.SDJ.VOCAL_IDX && p.kind === 'add') {
+      if (vx.song.pending.snapshot.active.filter(Boolean).length < 3) vocalEarly = true;
+      vocalAt = vx.render();
+      const firstLine = vx.vocalLine();
+      vx.retakeChange();
+      check('another take on a vocal writes a different line or chop', vx.vocalLine() !== firstLine || vx.render() !== vocalAt);
+    }
+    vx.acceptChange();
+  }
+  check('the DJ pitches a vocal, and never over fewer than three parts', vocalAt != null && !vocalEarly);
+  check('a vocal renders as one sliced, scaled Shabda sample, balanced',
+    !!vocalAt && balanced(vocalAt) && /s\("[a-z0-9]+(_[a-z0-9]+)+"\)\.slice\(/.test(vocalAt) && vocalAt.includes('.scale('));
+  const vArr = vx.renderArranged();
+  const vLine = 's("' + vx.vocalLine() + '")';
+  check('an arranged track sings in the peaks only', balanced(vArr) && vArr.split(vLine).length - 1 === 2);
+  let genreVoxOk = true;
+  for (const gnr of window.SDJ.Theory.GENRES.map((g) => g.id)) {
+    const gv = new window.SDJ.DJEngine();
+    gv.masterSeed = 77; gv.genrePref = gnr; gv.newSong();
+    gv.song.genome.active = gv.song.genome.active.map(() => true);
+    if (!balanced(gv.render()) || !balanced(gv.renderArranged()) || !gv.render().includes('.slice(')) genreVoxOk = false;
+  }
+  check('every genre renders a full track with vocals, balanced', genreVoxOk);
+  const legacyP = window.SDJ.DJEngine.songParams(vx.song, vx.song.genome);
+  ['active', 'variant', 'fx', 'double'].forEach((k) => { legacyP.genome[k] = legacyP.genome[k].slice(0, 7); });
+  legacyP.laneMood = legacyP.laneMood.slice(0, 7);
+  legacyP.lyric = null;
+  const lx = new window.SDJ.DJEngine();
+  const lsong = lx.loadSong(legacyP);
+  check('a seven-part record from before vocals still loads and renders',
+    !!lsong && lsong.genome.active.length === 8 && lsong.genome.active[7] === false &&
+    balanced(lx.render()) && !lx.render().includes('.slice('));
+  const fx = new window.SDJ.DJEngine();
+  fx.masterSeed = 3; fx.newSong(); fx.song.genome.fill = 2; fx.render();
+  check('the fill keeps its own lane, past the vocal',
+    fx._lastLayers[fx._lastLayers.length - 1] === window.SDJ.FILL_IDX && window.SDJ.FILL_IDX === 8);
+  const vg = { active: [true, false, false, false, false, false, false, true], variant: [0, 0, 0, 0, 0, 0, 0, 2], fx: [0, 0, 0, 0, 0, 0, 0, 0], double: [false, false, false, false, false, false, false, false], fill: 0 };
+  check('the record wears a vocal ring in the vocal colour',
+    window.SDJ.Vinyl.forLive({ seed: 5, name: 'Vox', key: 'C', bpm: 120 }, vg).includes(window.SDJ.LANE_COLORS[7]));
+
   // ---- lane-index coupling: lane words span exactly SDJ.STAGES (T-12) -----
   // LANE_NAMES isn't exported, so infer the highest lane index the parser can
   // emit and assert (max lane + 1) === the number of stages. Guards the parser
   // and the engine from drifting apart on lane count.
-  const laneWords = ['kick', 'hihats', 'bass', 'clap', 'chords', 'lead', 'air'];
+  const laneWords = ['kick', 'hihats', 'bass', 'clap', 'chords', 'lead', 'air', 'vocals'];
   let maxLane = -1;
   for (const w of laneWords) {
     const d = Cur.parse('no ' + w);

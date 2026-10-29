@@ -27,15 +27,16 @@
   // identity of their square covers. Defined once here, the single source.
   const LAYER_HUE = SDJ.LAYER_HUE = { 0: 352, 1: 190, 2: 275, 3: 33, 4: 150, 5: 320, 6: 210 };
 
-  // Label hue per lane (matches LANE_COLORS in dj.js; 7 = the fill pseudo-lane)
-  // — an acetate's label is tinted to the lane its pitch touches.
-  const LANE_HUE = SDJ.LANE_HUE = { 0: 341, 1: 175, 2: 270, 3: 33, 4: 152, 5: 315, 6: 210, 7: 228 };
+  // Label hue per lane (matches LANE_COLORS in dj.js; 7 = the vocal, 8 = the
+  // fill pseudo-lane) — an acetate's label is tinted to the lane its pitch touches.
+  const LANE_HUE = SDJ.LANE_HUE = { 0: 341, 1: 175, 2: 270, 3: 33, 4: 152, 5: 315, 6: 210, 7: 48, 8: 228 };
+  const FILL_LANE = SDJ.FILL_IDX != null ? SDJ.FILL_IDX : 8;
 
   // Groove geometry, shared so the lane home grooves (radiusFor) and the etched
   // decorative grooves stay locked together instead of drifting apart. Slope is
-  // slightly compressed from the old 6.2 so lane 7 + its twin/halo stays clear
-  // of the rim (worst case now < ~90 rather than grazing r≈97).
-  const GROOVE0 = 40, GROOVE_STEP = 5.9;
+  // compressed (6.2 → 5.9 → 5.3) as lanes were added, so the outermost groove
+  // (the fill, lane 8) plus its twin/halo stays clear of the rim.
+  const GROOVE0 = 40, GROOVE_STEP = 5.3;
 
   function esc(s) {
     return String(s == null ? '' : s)
@@ -102,7 +103,9 @@
         return ring(2.7, 0.9, ' stroke-dasharray="0.01 ' + (c / 14).toFixed(1) + '" stroke-linecap="round"' + rot);
       case 6: // air — a soft band that widens with the cut
         return ring(4.8 + vs * 0.47, 0.34);
-      case 7: // fill — one rising arc, a burst rather than a loop
+      case 7: // vocal — syllables: short words with a breath between, re-spaced by the cut
+        return ring(2.4, 0.9, seg(9 + vs, 0.55) + ' stroke-linecap="round"') + ring(0.8, 0.45, '', rad + 2.2);
+      case FILL_LANE: // fill — one rising arc, a burst rather than a loop
         return ring(2.8, 0.9, seg(1, 0.3) + ' stroke-linecap="round"');
       default:
         return ring(2.6, 0.85);
@@ -149,7 +152,7 @@
       if (g.fx && g.fx[i]) out += fxRails(i, col);
       if (g.double && g.double[i]) out += twinRing(i, col);
     }
-    if (g.fill > 0) out += laneRing(7, SDJ.FILL_COLOR || '#c3ccff', 'press', 0);
+    if (g.fill > 0) out += laneRing(FILL_LANE, SDJ.FILL_COLOR || '#c3ccff', 'press', 0);
     return out;
   }
 

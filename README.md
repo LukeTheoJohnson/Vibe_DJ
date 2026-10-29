@@ -42,6 +42,16 @@ shows each suggestion as a **diff** — the lines it takes out and brings in —
 (Strudel's own [`.pianoroll()`](https://strudel.cc/learn/visual-feedback/)) scrolls the
 notes with each layer on its own coloured lane, next to the set history.
 
+### 🎤 Vocals
+
+Once a track has three parts, the DJ can pitch **a vocal**: it writes a short lyric line
+from the song's seed and mood, voices it through [Shabda](https://shabda.ndre.gr)
+(Strudel's text-to-speech sample service, no key needed), and chops and pitches the line
+onto the track's key and groove. It's a vocal chop, not a singer. Type `sing: neon lights
+tonight` in Steer the DJ to put your own words on it (they're sent to Shabda to be
+spoken), or `no vocals` to keep it instrumental. If Shabda can't be reached, the set
+carries on without vocals.
+
 ### ◉ Saving a track
 
 When the arrangement is full (or you hit **◉ Save track** any time), the save dialog

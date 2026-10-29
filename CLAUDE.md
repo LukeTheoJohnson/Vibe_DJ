@@ -9,6 +9,8 @@ steered turn-by-turn from a two-turntable deck rig. Every track is a record bein
 approved parts press coloured rings onto the disc, saving "presses" it into the crate.
 No backend, no framework, no bundler. Strudel is loaded from a CDN and exposes
 `initStrudel`, `evaluate`, `hush` (plus all pattern functions) as globals.
+Vocals use **Shabda** (Strudel's text-to-speech sample service, `shabda.ndre.gr`) —
+the one network dependency besides the CDN and sample kits.
 
 **Naming/vocabulary (renamed 2026-07, rebranded 2026-10, plain-worded 2026-10-29):** the
 project is **Vibe DJ** (formerly Acetate). UI copy now says **save** / **saved track**
@@ -38,7 +40,7 @@ user click (browser policy) — that's why there's a Start button.
 ## Architecture
 
 Plain classic scripts sharing a `window.SDJ` namespace, loaded in dependency order in
-`index.html`: `rng → theory → names → dj → curate → viz → log → art → vinyl →
+`index.html`: `rng → theory → names → lyrics → dj → curate → viz → log → art → vinyl →
 visualiser → menu → app`. No ES modules (keeps it serverless-simple and robust on
 Windows).
 
@@ -78,6 +80,24 @@ Windows).
   808 rule), skip `.bank()` (the default dirt kit reads more acoustic), and stab `'power'`
   voicings; house is four-on-the-floor with offbeat open hats; synthwave favours the pad
   voice. `swingBy` stays boomBap/loFi only.
+- `src/lyrics.js` — **the words**: seeded lyric lines per mood (`line(seed, variant,
+  mood)`), `moodFor(genre, scale)`, and `sanitise()` — the ONE gate every sung word
+  passes (generated, `sing:` typed, share links) before it reaches code or Shabda:
+  `[a-z0-9]` words joined by `_`, 2–6 words, ≤40 chars. Lines are one Shabda sample
+  each; multi-word so they can't collide with dirt-samples banks (`yeah`, `ho`).
+  `namesIn(code)` finds vocal sample names in a program.
+- **The vocal lane (index 7, `SDJ.VOCAL_IDX`)** — eight lanes now; the fill pseudo-lane
+  moved to `FILL_IDX = STAGES.length` (8). `render()` voices `engine.vocalLine()` (the
+  `sing:` override `s.lyric`, else the seeded line for the vocal variant) as
+  `s("<line>").slice(n, chop).n(contour).scale("<key>2:<scale>")` — octave 2 because
+  Strudel pitches a base-pitch-less sample relative to c2. Unlocks at 3 parts; peaks only
+  in arranged tracks. `normaliseGenome` pads seven-lane genomes from older records;
+  `loadSong` accepts 7 or 8 and validates `lyric` by sanitiser round-trip. The app
+  registers new lines with `samples('shabda/speech:…')` inside `play()` and re-evaluates
+  when they land (`registerVocals`); a failure or 15 s timeout sets vocals offline for
+  the session (`s.vocalsOffline`, no vocal adds, chip). Saved code does NOT carry the
+  Shabda load line (it would break `splitCps`/ambient/remix parsing) — the app registers
+  on play, and Open in Strudel prepends it (`withVocalLoads`).
 - `src/vinyl.js` — **the record itself**: deterministic SVG discs (grooves, name
   imprinted on the label via textPath). Every lane owns a **home groove** (fixed radius,
   `radiusFor`) and a signature ring pattern that loosely draws the part (`laneRing`):

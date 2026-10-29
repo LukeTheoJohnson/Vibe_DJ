@@ -49,20 +49,23 @@
     { key: 'chords', label: 'the chords' },
     { key: 'lead', label: 'a lead melody' },
     { key: 'air', label: 'the atmosphere' },
+    { key: 'vocal', label: 'a vocal' },
   ];
   const MAX_STAGE = STAGES.length - 1;
+  const LANES = STAGES.length;
+  const VOCAL_IDX = 7; // the DJ's lyric line, voiced by Shabda (see lyrics.js)
 
   // Signature colour per layer. Drives the pianoroll's coloured lanes (each
   // sound gets its own hue) and tints the matching code line. Hues mirror the
   // A&R cover art (art.js LAYER_HUE) so a layer reads the same everywhere.
-  const LANE_COLORS = ['#f43f7d', '#2ee6d6', '#a64dff', '#ff9a1f', '#2edb8b', '#ff4dd2', '#4da6ff'];
+  const LANE_COLORS = ['#f43f7d', '#2ee6d6', '#a64dff', '#ff9a1f', '#2edb8b', '#ff4dd2', '#4da6ff', '#ffd23f'];
 
   // Complexity vocabulary beyond the 7 on/off lanes: per-lane FX flags, a
   // per-lane second voice ("double"), and one song-level fill/riser. These let
   // a track get genuinely dense instead of capping at seven elements.
   const FX_BITS = [1, 2, 4, 8];
   const FX_NAMES = { 1: 'delay', 2: 'crush', 4: 'wash', 8: 'width' };
-  const FILL_IDX = 7;                        // pseudo-lane for the fill line (maps a code line for A&R)
+  const FILL_IDX = LANES;                    // pseudo-lane for the fill line, just past the real lanes (maps a code line for A&R)
   const FILL_COLOR = '#c3ccff';
   const FILL_NAMES = ['', 'a riser', 'a snare build', 'an impact'];
   // Lanes whose double is an octave shadow (pure n() melodic voices — bass,
@@ -123,6 +126,18 @@
     for (let i = 1; i < g.active.length; i++) if (g.active[i]) r.push(i);
     return r;
   }
+  // Bring any genome up to the current lane count: records saved before a lane
+  // existed (seven-lane genomes from before the vocal) gain it switched off.
+  function normaliseGenome(g) {
+    const pad = (a, v) => { a = Array.isArray(a) ? a.slice(0, LANES) : []; while (a.length < LANES) a.push(v); return a; };
+    g.active = pad(g.active, false);
+    g.variant = pad(g.variant, 0);
+    g.fx = pad(g.fx, 0);
+    g.double = pad(g.double, false);
+    return g;
+  }
+  const lanesOf = (v) => { const a = []; for (let i = 0; i < LANES; i++) a.push(v); return a; };
+
   // Every active lane, kick included — the set deepen()/simplify() work over.
   function activeIdxsInclKick(g) {
     return droppableIdxs(g).concat(g.active[0] ? [0] : []);
@@ -195,12 +210,12 @@
       bpm: Rng.int(rng, genre.bpmLo, genre.bpmHi),
       // the genome the DJ optimises
       genome: {
-        active: [true, false, false, false, false, false, false], // open on the kick
-        variant: [0, 0, 0, 0, 0, 0, 0],
+        active: lanesOf(false).map((x, i) => i === 0), // open on the kick
+        variant: lanesOf(0),
         energyIdx: 1, // ENERGY_STEPS[1] = 0.4
         bank: Rng.int(rng, 0, BANKS.length - 1), // which drum machine
-        fx: [0, 0, 0, 0, 0, 0, 0],           // per-lane FX bitmask (FX_BITS)
-        double: [false, false, false, false, false, false, false], // per-lane second voice
+        fx: lanesOf(0),                      // per-lane FX bitmask (FX_BITS)
+        double: lanesOf(false),              // per-lane second voice
         fill: 0,                             // song-level fill/riser (0 = none, 1..3)
       },
       // optimiser state
@@ -214,7 +229,7 @@
       age: 0,
       warmth: 0,         // crowd warmth (-1..1): biases HOW the DJ searches
       intent: 0,         // density dial (-1..1): strip <-> hold <-> build <-> pile-on
-      laneMood: [0, 0, 0, 0, 0, 0, 0], // per-lane opinion (-1..1): granular feedback,
+      laneMood: lanesOf(0), // per-lane opinion (-1..1): granular feedback,
                          // NOT genome — the human's taste per component, never reverted.
                          // >0 protect & feature the lane; <0 strip & drop it.
       lastVerdict: null, // { kind, delta, desc } of the last judged mutation
@@ -1131,6 +1146,28 @@
       }
     }
 
+    // 7 — vocal: a lyric line the DJ writes (SDJ.Lyrics, or `sing:` words from
+    // the direction box), voiced by Shabda text-to-speech as ONE sample, then
+    // sliced onto the bar and pitched on the song's scale. Low register (octave
+    // 2): Strudel pitches a sample without a base pitch relative to c2, so
+    // degree 0 sits near the voice's natural pitch. The variant picks the line,
+    // the chop and the contour, so a rework or another take re-writes it.
+    if (on(VOCAL_IDX)) {
+      const vr = lrng(VOCAL_IDX);
+      const name = this.vocalLine();
+      const words = name.split('_').length;
+      const slices = words <= 3 ? 4 : 8;
+      const chop = slices === 4
+        ? Rng.pick(vr, ['0 1 2 3', '0 ~ 1 [2 3]', '0 1 ~ [2 3]', '[0 1] ~ 2 3', '0 0 1 [2 3]', '<0 2> 1 ~ 3'])
+        : Rng.pick(vr, ['0 1 2 3 4 5 6 7', '[0 1] 2 3 ~ [4 5] 6 7', '0 1 2 ~ 4 5 6 ~', '[0 1 2 3] ~ [4 5] [6 7]', '0 ~ 1 2 [3 4] ~ [5 6] 7']);
+      const contour = Rng.pick(vr, ['0', '<0 2>', '<0 -1 2 0>', '0 2 4 2', '<4 2 0 0>', '0 0 2 [4 2]', '<0 3 2 0>']);
+      let vox = 's("' + name + '").slice(' + slices + ', "' + chop + '").n("' + contour + '").scale(' + scl(2) + ')' +
+        '.gain(' + n2(0.55 + e * 0.2) + ').room(' + n2(0.25 + (1 - e) * 0.2) + ')';
+      if (gid === 'synthwave' || gid === 'loFi' || gid === 'rb' || Rng.chance(vr, 0.3)) vox += '.delay(0.3).delaytime(0.1875).delayfeedback(0.3)';
+      if (gid === 'boomBap' || gid === 'loFi') vox += '.swingBy(1/6,8)';
+      put(VOCAL_IDX, vox);
+    }
+
     // Song-level fill/riser — its own body line (pseudo-lane FILL_IDX), so the
     // A&R map can highlight it like any other change.
     if (g.fill > 0) {
@@ -1150,6 +1187,16 @@
     this._lastLayers = lineLayers; // body-line -> stage index, for A&R highlighting
     this._lastLines = layers.slice(); // the body lines themselves — renderAB() recombines them
     return 'setcps(' + n2(s.cps) + ')\nstack(\n  ' + body + '\n)';
+  };
+
+  // The vocal's lyric line: the `sing:` override when one is set, otherwise the
+  // seeded line for this song and the vocal lane's current variant. Always
+  // sanitiser-shaped ([a-z0-9] words joined by "_").
+  DJEngine.prototype.vocalLine = function () {
+    const s = this.song;
+    if (s.lyric) return s.lyric;
+    return SDJ.Lyrics.line(s.seed, s.genome.variant[VOCAL_IDX] || 0,
+      SDJ.Lyrics.moodFor(s.genre && s.genre.id, s.scaleType));
   };
 
   // ---- A/B rendering: hear a pitched change against the committed track --
@@ -1354,7 +1401,7 @@
     return {
       seed: s.seed >>> 0, name: s.name, key: s.key, scaleType: s.scaleType, prog: prog,
       genre: s.genre.id, bpm: s.bpm, laneMood: (s.laneMood || []).slice(), banks: !!s.banksLoaded,
-      genome: cloneGenome(g),
+      genome: cloneGenome(g), lyric: s.lyric || null,
     };
   };
 
@@ -1364,15 +1411,18 @@
     if (!p || typeof p !== 'object') return null;
     const g = p.genome;
     const int = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
-    const ints = (a, lo, hi) => Array.isArray(a) && a.length === 7 && a.every((v) => int(v, lo, hi));
-    const bools = (a) => Array.isArray(a) && a.length === 7 && a.every((v) => typeof v === 'boolean');
+    // seven-lane arrays are records from before the vocal lane — padded below
+    const lenOk = (a) => Array.isArray(a) && (a.length === LANES || a.length === 7);
+    const ints = (a, lo, hi) => lenOk(a) && a.every((v) => int(v, lo, hi));
+    const bools = (a) => lenOk(a) && a.every((v) => typeof v === 'boolean');
     const genre = Theory.GENRES.find((x) => x.id === p.genre);
     const scales = [];
     Theory.GENRES.forEach((x) => Theory.scalesFor(x).forEach((sc) => { if (scales.indexOf(sc) < 0) scales.push(sc); }));
     const ok = genre && int(p.seed, 0, 0xffffffff) && typeof p.name === 'string' &&
       Theory.ROOTS.indexOf(p.key) >= 0 && scales.indexOf(p.scaleType) >= 0 &&
       int(p.prog, 0, Theory.PROGRESSIONS.length - 1) && int(p.bpm, 40, 240) &&
-      Array.isArray(p.laneMood) && p.laneMood.length === 7 &&
+      lenOk(p.laneMood) &&
+      (p.lyric == null || (typeof p.lyric === 'string' && SDJ.Lyrics.sanitise(p.lyric) === p.lyric)) &&
       p.laneMood.every((v) => typeof v === 'number' && v >= -1 && v <= 1) &&
       g && typeof g === 'object' && bools(g.active) && ints(g.variant, 0, 1e6) &&
       int(g.energyIdx, 0, ENERGY_STEPS.length - 1) && int(g.bank, 0, Math.max(0, BANKS.length - 1)) &&
@@ -1386,8 +1436,10 @@
     s.prog = Theory.PROGRESSIONS[p.prog];
     s.bpm = p.bpm; s.cps = s.bpm / 240;
     s.laneMood = p.laneMood.slice();
+    while (s.laneMood.length < LANES) s.laneMood.push(0);
+    s.lyric = p.lyric || null;
     s.banksLoaded = !!p.banks;
-    restoreGenome(s.genome, g);
+    restoreGenome(s.genome, normaliseGenome(cloneGenome(g)));
     this._lastSig = null;
     return s;
   };
@@ -1494,6 +1546,8 @@
       // An explicit feature (part-mixer "feature this lane") overrides a prior
       // ban: the human has changed their mind, so re-admit it as a candidate (E-6).
       if ((s.banned['add:' + i] && !likes(i)) || dislikes(i)) return;
+      if (i === VOCAL_IDX && act < 3 && !likes(i)) return; // never sing over a bare kick
+      if (i === VOCAL_IDX && s.vocalsOffline) return;     // Shabda unreachable this session
       const spine = i === 2 ? 2.5 : 1;
       cands.push({ kind: 'add', layer: i, dir: 1, w: 3 * more * spine * (likes(i) ? 2.5 : 1), banKey: 'add:' + i, desc: 'bring in ' + STAGES[i].label });
     });
@@ -1716,6 +1770,8 @@
   SDJ.STAGES = STAGES;
   SDJ.LANE_COLORS = LANE_COLORS;
   SDJ.FILL_IDX = FILL_IDX;
+  SDJ.VOCAL_IDX = VOCAL_IDX;
+  DJEngine.normaliseGenome = normaliseGenome;
   SDJ.FILL_COLOR = FILL_COLOR;
   SDJ.FILL_NAMES = FILL_NAMES;
   SDJ.FX_BITS = FX_BITS;
