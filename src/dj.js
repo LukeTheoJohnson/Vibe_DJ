@@ -1154,13 +1154,14 @@
 
   // ---- A/B rendering: hear a pitched change against the committed track --
   //
-  // The pitch on Deck B is a diff on one lane. renderAB(mix) builds ONE
-  // balanced program carrying BOTH versions of the touched lane — the
-  // committed lines scaled by (1-mix), the proposed lines by mix — so the
-  // crossfader can blend the change in and out live. Chained .gain()
-  // multiplies in Strudel, so the wrapper scales a lane without touching its
-  // own gain maths. Untouched lanes render identically in both versions and
-  // are included once; mix=1 is exactly the proposed render.
+  // The pitch on Deck B is mostly a diff on one lane — but an add also lifts
+  // the energy floor, which re-shapes OTHER lanes (kick pattern, bass filter).
+  // renderAB(mix) builds ONE balanced program carrying BOTH versions of every
+  // lane that differs — the committed lines scaled by (1-mix), the proposed
+  // lines by mix — so mix=0 is exactly the committed track and mix=1 exactly
+  // the proposed render. Chained .gain() multiplies in Strudel, so the
+  // wrapper scales a lane without touching its own gain maths. Lanes that
+  // render identically in both versions are included once.
 
   DJEngine.prototype.renderAB = function (mix) {
     const s = this.song;
@@ -1168,7 +1169,6 @@
     if (!s || !s.pending || !s.pending.snapshot || s.pending.layer == null || m >= 0.999) {
       return this.render();
     }
-    const lane = s.pending.layer;
     const proposed = cloneGenome(s.genome);
     restoreGenome(s.genome, s.pending.snapshot);
     this.render();
@@ -1178,16 +1178,22 @@
     const code = this.render(); // leaves the line maps on the proposed state
     const bLines = (this._lastLines || []).slice();
     const bMap = (this._lastLayers || []).slice();
+    // a lane differs when its lines (in order) aren't identical across versions
+    const linesOf = (lines, map, l) => lines.filter((_, i) => map[i] === l).join('\n');
+    const differs = {};
+    aMap.concat(bMap).forEach((l) => {
+      if (!(l in differs)) differs[l] = linesOf(aLines, aMap, l) !== linesOf(bLines, bMap, l);
+    });
     const out = [];
     for (let i = 0; i < bLines.length; i++) {
-      if (bMap[i] === lane) {
+      if (differs[bMap[i]]) {
         if (m > 0.001) out.push(bLines[i] + '.gain(' + n2(m) + ')');
       } else {
         out.push(bLines[i]);
       }
     }
     for (let i = 0; i < aLines.length; i++) {
-      if (aMap[i] === lane) out.push(aLines[i] + '.gain(' + n2(1 - m) + ')');
+      if (differs[aMap[i]]) out.push(aLines[i] + '.gain(' + n2(1 - m) + ')');
     }
     if (!out.length) return code;
     return code.slice(0, code.indexOf('stack(')) + 'stack(\n  ' + out.join(',\n  ') + '\n)';

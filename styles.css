@@ -160,7 +160,7 @@ body[data-view="menu"] .view-menu { height: 100%; }
 
 /* ── the deck rig: two platters with a crossfader between ────────────── */
 .deck-rig {
-  display: grid; grid-template-columns: 1fr minmax(140px, 180px) 1fr;
+  display: grid; grid-template-columns: 1fr minmax(170px, 220px) 1fr;
   gap: 14px; align-items: stretch; margin: 4px 0 10px;
 }
 .deck-rig[hidden] { display: none; }
@@ -454,24 +454,34 @@ body[data-view="menu"] .view-menu { height: 100%; }
 }
 body.visuals-open { overflow: hidden; }
 
-/* ── the A/B on/off switch: hear the track (A, cyan) or the change (B, amber) ─ */
-.abswitch { flex-direction: row; align-items: center; justify-content: center; gap: 10px; }
-.abswitch-end { font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
-.abswitch-end.a { color: var(--cool); }
-.abswitch-end.b { color: var(--warm); }
-.abswitch-toggle { position: relative; width: 72px; height: 34px; display: inline-block; cursor: pointer; flex: 0 0 auto; }
-.abswitch-toggle input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
-.abswitch-slider {
-  position: absolute; inset: 0; border-radius: 999px;
-  background: var(--panel-2); border: 1px solid var(--line); transition: background .15s, border-color .15s;
+/* ── the A/B pick: two big buttons — hear the track WITHOUT (A, cyan) or WITH (B, amber) the change ─ */
+.abpick { gap: 8px; width: 100%; }
+.abpick-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); text-align: center; }
+.abpick-btn {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 12px;
+  border: 2px solid var(--line); border-radius: 10px; background: var(--panel-2);
+  color: var(--muted); font: inherit; font-size: 14px; text-align: left; cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s, box-shadow .15s;
 }
-.abswitch-slider::before {
-  content: ''; position: absolute; top: 3px; left: 3px; width: 28px; height: 28px;
-  border-radius: 50%; background: var(--cool); transition: transform .18s, background .18s;
-}
-.abswitch-toggle input:checked ~ .abswitch-slider { border-color: var(--warm); }
-.abswitch-toggle input:checked ~ .abswitch-slider::before { transform: translateX(38px); background: var(--warm); }
-.abswitch-toggle input:focus-visible ~ .abswitch-slider { box-shadow: 0 0 0 2px var(--cool); }
+.abpick-btn b { font-size: 16px; }
+.abpick-text { display: flex; flex-direction: column; line-height: 1.25; }
+.abpick-text small { font-size: 10.5px; opacity: .75; margin-top: 2px; }
+.abpick-play { font-size: 13px; opacity: .35; }
+.abpick-btn:hover:not(:disabled) { color: var(--ink); }
+.abpick-btn.a.on { border-color: var(--cool); color: var(--ink); background: rgba(69, 182, 255, 0.14); box-shadow: 0 0 16px -4px var(--cool); }
+.abpick-btn.b.on { border-color: var(--warm); color: var(--ink); background: rgba(255, 176, 60, 0.14); box-shadow: 0 0 16px -4px var(--warm); }
+.abpick-btn.on .abpick-play { opacity: 1; }
+.abpick-btn.a.on .abpick-play { color: var(--cool); }
+.abpick-btn.b.on .abpick-play { color: var(--warm); }
+.abpick-btn:focus-visible { outline: 2px solid var(--cool); outline-offset: 2px; }
+.abpick-hint { font-size: 11px; color: var(--muted); text-align: center; line-height: 1.4; }
+
+/* the question under a pitch, the bigger verdict buttons, and the save-any-time pointer */
+.sg-ask { font-size: 13px; font-weight: 600; color: var(--ink); margin-top: 8px; }
+.sg-actions .btn { font-size: 14px; padding: 13px 10px; }
+.sg-save-hint { font-size: 11.5px; color: var(--muted); text-align: center; line-height: 1.4; }
+.btn.save-any { background: transparent; border: 1px solid var(--good); color: var(--good); font-weight: 700; }
+.btn.save-any:disabled { border-color: var(--line); color: var(--muted); }
 
 /* ── menu: signal-bloom hub (scoped palette — menu view only) ─────────── */
 .view-menu {
@@ -785,7 +795,16 @@ body[data-view="live"] #abB.on { border-color:var(--sr-b); color:var(--sr-b); }
 /* Deck B pitch card + approve/skip */
 body[data-view="live"] .sg-kind { border-radius:2px; font-size:10px; letter-spacing:.06em; padding:4px 10px; }
 body[data-view="live"] .sg-desc { color:#fff; font-size:15px; }
-body[data-view="live"] .sg-actions .btn { border-radius:2px; border:none; }
+body[data-view="live"] .sg-actions .btn { border-radius:2px; border:none; font-size:13px; padding:13px 10px; letter-spacing:.04em; }
+body[data-view="live"] .sg-ask { color:var(--sr-bright); }
+body[data-view="live"] .abpick-btn { border-radius:3px; background:var(--sr-surface); border-color:var(--sr-border); }
+body[data-view="live"] .abpick-btn.a.on { border-color:var(--sr-a); background:rgba(40, 200, 224, 0.14); box-shadow:none; }
+body[data-view="live"] .abpick-btn.b.on { border-color:var(--sr-b); background:rgba(255, 155, 47, 0.14); box-shadow:none; }
+body[data-view="live"] .abpick-btn.a.on .abpick-play { color:var(--sr-a); }
+body[data-view="live"] .abpick-btn.b.on .abpick-play { color:var(--sr-b); }
+body[data-view="live"] .btn.save-any { background:transparent; border:1px solid var(--sr-green); color:var(--sr-green); }
+body[data-view="live"] .btn.save-any:hover:not(:disabled) { background:var(--sr-green); color:#0a120c; }
+body[data-view="live"] .btn.save-any:disabled { border-color:var(--sr-border); color:var(--sr-label); }
 body[data-view="live"] .vote-down { background:var(--sr-red); color:#fff; }
 body[data-view="live"] .vote-down:hover { background:#ff5f5f; color:#fff; }
 body[data-view="live"] .vote-up { background:var(--sr-green); color:#0a120c; }

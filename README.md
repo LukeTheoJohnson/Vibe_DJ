@@ -40,7 +40,7 @@ tucked into a `</>` drawer, with the pitched lane's lines tinted.
 
 ### ◉ Cutting — saving cuts a dubplate
 
-When the arrangement is full (or you hit **◉ Cut a dubplate** any time), the press modal
+When the arrangement is full (or you hit **◉ Save track** any time), the press modal
 opens: the disc spins with its accreted colours, you **imprint the name on the label**
 (it updates live as you type), and the modal states exactly **which version is banked** —
 always the *approved* track; an un-judged pitch on Deck B is left off

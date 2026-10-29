@@ -246,19 +246,27 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
       balanced(a) && balanced(mid) && balanced(b), mid);
     check('mid-fader carries the touched lane at half gain', mid.includes('.gain(0.5)'), mid);
     check('the fader ends are audibly different programs', a !== b);
+    // "Without" must be exactly the committed track — an add lifts the energy
+    // floor and re-shapes other lanes, so swapping only the pitched lane isn't enough
+    const body = (code) => code.replace(/\.gain\(1\)/g, '').split('\n')
+      .map((l) => l.trim().replace(/,$/, '')).sort().join('\n');
+    check('the Without end plays exactly the committed track',
+      body(a) === body(eng.renderCommitted()), a);
   }
-  // the A/B switch is an on/off flip (no blend): OFF = the current track only,
-  // ON = the full pitched change — two audibly different, balanced programs.
-  const abSwitch = doc.getElementById('abSwitch');
+  // the A/B pick is an on/off choice (no blend): Without = the current track only,
+  // With = the full pitched change — two audibly different, balanced programs.
   let abEvalsBefore = evalCalls.length;
-  abSwitch.checked = false; abSwitch.dispatchEvent(new window.Event('change'));
+  doc.getElementById('abTrack').click();
   await until(() => evalCalls.length > abEvalsBefore, 300);
   const trackOnly = evalCalls[evalCalls.length - 1];
   abEvalsBefore = evalCalls.length;
-  abSwitch.checked = true; abSwitch.dispatchEvent(new window.Event('change'));
+  doc.getElementById('abChange').click();
   await until(() => evalCalls.length > abEvalsBefore, 300);
   const withChange = evalCalls[evalCalls.length - 1];
-  check('the A/B switch flips between two different programs', trackOnly !== withChange, trackOnly);
+  check('the A/B pick switches between two different programs', trackOnly !== withChange, trackOnly);
+  check('the A/B pick shows which side is playing',
+    doc.getElementById('abChange').getAttribute('aria-pressed') === 'true' &&
+    doc.getElementById('abTrack').getAttribute('aria-pressed') === 'false');
   check('both switch positions stay balanced', balanced(trackOnly) && balanced(withChange));
 
   // the part mixer biases the DJ: marking an active part "drop" makes the DJ pitch

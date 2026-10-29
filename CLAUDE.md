@@ -48,7 +48,7 @@ Windows).
     rework is only spaced out (so pitching never dead-ends).
   - `render()` — compile the genome → an idiomatic Strudel `stack(...)` string. Also
     stashes `_lastLines`/`_lastLayers` (body lines + their lane indices).
-  - `renderAB(mix)` — ONE balanced program carrying both versions of the pitched lane at
+  - `renderAB(mix)` — ONE balanced program carrying both versions of every lane that differs (an add re-shapes other lanes via the energy floor) at
     complementary gains (chained `.gain()` multiplies) — what the crossfader evaluates.
   - `renderCommitted()` — the approved track only, rendered from the pre-pitch snapshot —
     what a save banks, always.
@@ -88,7 +88,7 @@ Windows).
   A/B crossfader), the pressing modal, the live code panel (single-pass highlighter,
   bottom-right of the Live stage) with the **direction box** above it, the
   compact set history, the `localStorage` crate and the remix console. The Live verdict
-  buttons read **"Press it" / "Bin it"**; the old on-screen "DJ moves" event log is gone
+  buttons read **"✓ Keep the change" / "✗ Bin the change"**, the A/B pick is two big **Without / With** buttons (`#abTrack`/`#abChange`), and **◉ Save track** (`#saveBtn`) is always available while live; the old on-screen "DJ moves" event log is gone
   (`logEvent` is a `console.debug` shim — `SDJ.SetLog` recording + the ⬇ Log export
   survive; keep them, they're the diagnostic tuning loop). Agent-native surface:
   `SDJ.live.*`, `SDJ.ab.*`, `SDJ.press.*`, `SDJ.remix.*`, `SDJ.curate.*`,

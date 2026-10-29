@@ -78,14 +78,14 @@
       // deck production controls + unified transport
       'saveBtn', 'transport', 'tpKind', 'tpName', 'tpStop',
       // the DJ's suggestion card + tuning (genre pills, density, part mixer) + status
-      'sgEmpty', 'sgCard', 'sgKind', 'sgDesc', 'sgActions', 'sgApprove', 'sgSkip',
+      'sgEmpty', 'sgCard', 'sgKind', 'sgDesc', 'sgAsk', 'sgActions', 'sgApprove', 'sgSkip', 'sgSaveHint',
       'livePartMix', 'liveDensity', 'liveGenrePills',
       // the direction box (free-text curation above the live code)
       'curateInput', 'curateChips',
       'djNow', 'djVerb', 'djMove', 'djFeed',
       // the deck rig: two platters + the A/B crossfader
       'deckRig', 'deckAPlatter', 'deckADisc', 'deckACap', 'deckBPlatter', 'deckBDisc',
-      'abWrap', 'abSwitch',
+      'abWrap', 'abTrack', 'abChange',
       // the top-bar live player + the full-screen pure-visual overlay
       'playerViz', 'visualStage', 'visualCanvas',
       // the Live floor's mini visualiser tile
@@ -121,8 +121,9 @@
     if (el.tpStop) el.tpStop.addEventListener('click', stopPlayback);
     if (el.sgApprove) el.sgApprove.addEventListener('click', () => liveDecide(true));
     if (el.sgSkip) el.sgSkip.addEventListener('click', () => liveDecide(false));
-    // the A/B switch: flip the pitched change on/off against the committed track
-    if (el.abSwitch) el.abSwitch.addEventListener('change', onAbSwitch);
+    // the A/B pick: hear the track without (A) or with (B) the pitched change
+    if (el.abTrack) el.abTrack.addEventListener('click', () => setAbMix(0));
+    if (el.abChange) el.abChange.addEventListener('click', () => setAbMix(1));
     // the full-screen pure-visual overlay closes on a click anywhere
     if (el.visualStage) el.visualStage.addEventListener('click', closeVisuals);
     // the top-bar live player — the shared reactive visualiser as a compact strip
@@ -284,13 +285,13 @@
   let pitchLayer = -1; // the lane the current suggestion touches (lights its chip)
 
   const PITCH_KINDS = {
-    add:     { label: 'new part',    cls: 'k-add' },
-    drop:    { label: 'drop a part', cls: 'k-drop' },
-    reshape: { label: 'rework',      cls: 'k-reshape' },
-    fx:      { label: 'effect',      cls: 'k-fx' },
-    double:  { label: 'thicken',     cls: 'k-double' },
-    fill:    { label: 'fill',        cls: 'k-fill' },
-    save:    { label: 'ready?',      cls: 'k-save' },
+    add:     { label: 'add a part',     cls: 'k-add' },
+    drop:    { label: 'remove a part',  cls: 'k-drop' },
+    reshape: { label: 'rework a part',  cls: 'k-reshape' },
+    fx:      { label: 'add an effect',  cls: 'k-fx' },
+    double:  { label: 'thicken a part', cls: 'k-double' },
+    fill:    { label: 'add a fill',     cls: 'k-fill' },
+    save:    { label: 'ready to save?', cls: 'k-save' },
   };
   // the acetate's centre mark per pitch kind (what Deck B's test cut wears)
   const KIND_GLYPHS = { add: '+', drop: '−', reshape: '≈', fx: '✦', double: '≡', fill: '▲', save: '◉' };
@@ -328,7 +329,7 @@
     pitchLayer = p.layer;
     const kind = PITCH_KINDS[p.kind] || PITCH_KINDS.reshape;
     showSuggestion(kind, p.desc ? p.desc.charAt(0).toUpperCase() + p.desc.slice(1) : '—',
-      'Press it', 'Bin it');
+      '✓ Keep the change', '✗ Bin the change', 'Keep this change in your track?');
     // the code drawer shows the pattern with the pitched lane's lines tinted
     if (el.code) el.code.innerHTML = pitchCodeHtml(code, p.layer, layerMap);
     renderDeckB(p);
@@ -346,7 +347,7 @@
     showSuggestion(PITCH_KINDS.save,
       settled ? 'That’s the whole track — cut it as a dubplate?'
               : 'This is sounding full — cut it as a dubplate?',
-      'Cut it', 'Keep going');
+      '◉ Save track', 'Keep building', 'Save it to your crate now?');
     // Deck B shows the finished record, ready for the press
     if (el.deckBDisc) el.deckBDisc.innerHTML = committedDisc();
     showFader(false);
@@ -356,12 +357,15 @@
     setDeckSpin();
   }
 
-  function showSuggestion(kind, desc, approveLabel, skipLabel) {
+  function showSuggestion(kind, desc, approveLabel, skipLabel, ask) {
     if (el.sgEmpty) el.sgEmpty.hidden = true;
     if (el.sgCard) el.sgCard.hidden = false;
     if (el.sgActions) el.sgActions.hidden = false;
     if (el.sgKind) { el.sgKind.textContent = kind.label; el.sgKind.className = 'sg-kind ' + kind.cls; }
     if (el.sgDesc) el.sgDesc.textContent = desc;
+    if (el.sgAsk) el.sgAsk.textContent = ask || '';
+    // the save-any-time pointer only matters while a change is on the table
+    if (el.sgSaveHint) el.sgSaveHint.hidden = kind === PITCH_KINDS.save;
     if (el.sgApprove) el.sgApprove.textContent = approveLabel;
     if (el.sgSkip) el.sgSkip.textContent = skipLabel;
   }
@@ -371,6 +375,7 @@
     pitchLayer = -1;
     if (el.sgCard) el.sgCard.hidden = true;
     if (el.sgActions) el.sgActions.hidden = true;
+    if (el.sgSaveHint) el.sgSaveHint.hidden = true;
     if (el.sgEmpty) el.sgEmpty.hidden = false;
     setDeckSpin();
   }
@@ -403,10 +408,10 @@
     return true;
   }
 
-  // ---- the A/B switch: hear the pitch against the committed track ----
-  // Deck A is the committed track, Deck B the pitched change. The switch flips
-  // engine.renderAB(mix) between the two ends — 0 = track only, 1 = full change.
-  // It's an on/off flip, not a blend: you either hear the change or you don't.
+  // ---- the A/B pick: hear the pitch against the committed track ----
+  // Deck A is the committed track, Deck B the pitched change. Two buttons pick
+  // engine.renderAB(mix) at either end — 0 = track only, 1 = full change.
+  // It's an on/off pick, not a blend: you either hear the change or you don't.
 
   function resetAb() {
     abMix = 1;
@@ -414,7 +419,9 @@
   }
 
   function reflectAb() {
-    if (el.abSwitch) el.abSwitch.checked = abMix >= 0.5;
+    const onB = abMix >= 0.5;
+    if (el.abTrack) { el.abTrack.classList.toggle('on', !onB); el.abTrack.setAttribute('aria-pressed', String(!onB)); }
+    if (el.abChange) { el.abChange.classList.toggle('on', onB); el.abChange.setAttribute('aria-pressed', String(onB)); }
     if (el.deckAPlatter) el.deckAPlatter.classList.toggle('hot', abMix < 0.5);
     if (el.deckBPlatter) el.deckBPlatter.classList.toggle('hot', abMix >= 0.5);
   }
@@ -427,12 +434,6 @@
     return evaluateAb();
   }
 
-  // Flip → hear it or don't. Snaps to Deck A (0) or Deck B (1), no partial blend.
-  function onAbSwitch() {
-    if (!el.abSwitch) return;
-    setAbMix(el.abSwitch.checked ? 1 : 0);
-  }
-
   function evaluateAb() {
     if (!running || !pitching || pitching === 'save') return false;
     if (!engine.song || !engine.song.pending || !engine.renderAB) return false;
@@ -442,9 +443,10 @@
 
   function showFader(on) {
     if (el.abWrap) el.abWrap.classList.toggle('off', !on);
-    // the A/B switch is a real keyboard-operable control — disable it when the
-    // fader's hidden so it isn't a dead tab-stop that flips nothing
-    if (el.abSwitch) el.abSwitch.disabled = !on;
+    // the A/B buttons are real keyboard-operable controls — disable them when the
+    // pick's hidden so they aren't dead tab-stops that switch nothing
+    if (el.abTrack) el.abTrack.disabled = !on;
+    if (el.abChange) el.abChange.disabled = !on;
   }
 
   // ---- the records on the platters ---------------------------------------
