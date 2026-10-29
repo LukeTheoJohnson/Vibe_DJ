@@ -1158,24 +1158,43 @@
   // the energy floor, which re-shapes OTHER lanes (kick pattern, bass filter).
   // renderAB(mix) builds ONE balanced program carrying BOTH versions of every
   // lane that differs — the committed lines scaled by (1-mix), the proposed
-  // lines by mix — so mix=0 is exactly the committed track and mix=1 exactly
-  // the proposed render. Chained .gain() multiplies in Strudel, so the
+  // lines by mix — so mix=0 is exactly the committed track and mix=1 the
+  // proposed render. Chained .gain() multiplies in Strudel, so the
   // wrapper scales a lane without touching its own gain maths. Lanes that
   // render identically in both versions are included once.
+  //
+  // Level matching: an add (or a double/fill) makes B louder, and louder
+  // nearly always sounds "better" — so the With side is trimmed toward A's
+  // loudness with a whole-stack .postgain() (a drop is lifted the same way).
+  // The Without end is never touched: it stays exactly the committed track.
 
-  DJEngine.prototype.renderAB = function (mix) {
+  // Rough loudness of a genome: one unit per sounding part, a doubled voice
+  // half again, a fill a little. Only the ratio between A and B matters.
+  function loudness(g) {
+    let n = 0;
+    for (let i = 0; i < g.active.length; i++) if (g.active[i]) n += g.double[i] ? 1.5 : 1;
+    return n + (g.fill > 0 ? 0.3 : 0);
+  }
+
+  // The postgain the With side wears so it matches Deck A's level (1 = none).
+  DJEngine.prototype.abLevel = function () {
     const s = this.song;
-    const m = clamp(typeof mix === 'number' ? mix : 1, 0, 1);
-    if (!s || !s.pending || !s.pending.snapshot || s.pending.layer == null || m >= 0.999) {
-      return this.render();
-    }
+    if (!s || !s.pending || !s.pending.snapshot) return 1;
+    const a = loudness(s.pending.snapshot), b = loudness(s.genome);
+    return a > 0 && b > 0 ? clamp(Math.sqrt(a / b), 0.6, 1.3) : 1;
+  };
+
+  // Both versions' body lines + lane maps, and which lanes differ. Leaves the
+  // engine's line maps on the proposed (live) state.
+  DJEngine.prototype._abParts = function () {
+    const s = this.song;
     const proposed = cloneGenome(s.genome);
     restoreGenome(s.genome, s.pending.snapshot);
-    this.render();
+    const aCode = this.render();
     const aLines = (this._lastLines || []).slice();
     const aMap = (this._lastLayers || []).slice();
     restoreGenome(s.genome, proposed);
-    const code = this.render(); // leaves the line maps on the proposed state
+    const code = this.render();
     const bLines = (this._lastLines || []).slice();
     const bMap = (this._lastLayers || []).slice();
     // a lane differs when its lines (in order) aren't identical across versions
@@ -1184,6 +1203,19 @@
     aMap.concat(bMap).forEach((l) => {
       if (!(l in differs)) differs[l] = linesOf(aLines, aMap, l) !== linesOf(bLines, bMap, l);
     });
+    return { aCode, aLines, aMap, code, bLines, bMap, differs };
+  };
+
+  DJEngine.prototype.renderAB = function (mix) {
+    const s = this.song;
+    const m = clamp(typeof mix === 'number' ? mix : 1, 0, 1);
+    if (!s || !s.pending || !s.pending.snapshot || s.pending.layer == null) {
+      return this.render();
+    }
+    const level = 1 + (this.abLevel() - 1) * m;
+    const levelled = (c) => (Math.abs(level - 1) > 0.005 ? c + '.postgain(' + n2(level) + ')' : c);
+    if (m >= 0.999) return levelled(this.render());
+    const { aLines, aMap, code, bLines, bMap, differs } = this._abParts();
     const out = [];
     for (let i = 0; i < bLines.length; i++) {
       if (differs[bMap[i]]) {
@@ -1195,8 +1227,32 @@
     for (let i = 0; i < aLines.length; i++) {
       if (differs[aMap[i]]) out.push(aLines[i] + '.gain(' + n2(1 - m) + ')');
     }
-    if (!out.length) return code;
-    return code.slice(0, code.indexOf('stack(')) + 'stack(\n  ' + out.join(',\n  ') + '\n)';
+    if (!out.length) return levelled(code);
+    return levelled(code.slice(0, code.indexOf('stack(')) + 'stack(\n  ' + out.join(',\n  ') + '\n)');
+  };
+
+  // The pitch as a code diff for the code panel: every body line of the
+  // proposed track, with the lanes that change shown twice — the committed
+  // lines marked '-' then the proposed ones '+'. Lanes in lane order, so a
+  // dropped part's removed lines sit where it used to play.
+  // Returns { head, lines: [{ text, mark: ' ' | '+' | '-', layer }] } or null.
+  DJEngine.prototype.abDiff = function () {
+    const s = this.song;
+    if (!s || !s.pending || !s.pending.snapshot) return null;
+    const { aLines, aMap, code, bLines, bMap, differs } = this._abParts();
+    const lanes = [];
+    aMap.concat(bMap).forEach((l) => { if (lanes.indexOf(l) < 0) lanes.push(l); });
+    lanes.sort((x, y) => x - y);
+    const lines = [];
+    lanes.forEach((l) => {
+      if (differs[l]) {
+        aLines.forEach((t, i) => { if (aMap[i] === l) lines.push({ text: t, mark: '-', layer: l }); });
+        bLines.forEach((t, i) => { if (bMap[i] === l) lines.push({ text: t, mark: '+', layer: l }); });
+      } else {
+        bLines.forEach((t, i) => { if (bMap[i] === l) lines.push({ text: t, mark: ' ', layer: l }); });
+      }
+    });
+    return { head: code.slice(0, code.indexOf('stack(')), lines: lines, level: this.abLevel() };
   };
 
   // The committed track — the version a save banks. While a pitch is un-judged
@@ -1284,6 +1340,58 @@
     return code;
   };
 
+  // ---- portable songs: a track as plain data (share links) ---------------
+  // A share link must never carry code: Strudel evaluates code as JavaScript,
+  // so a crafted link would run in the app's origin. Instead it carries the
+  // song's musical parameters — exactly what render() reads — and the
+  // receiving app re-renders them. loadSong() validates every field.
+
+  // The parameters render() needs, for song s with genome g (the committed one).
+  // Null when the song can't be described (an unknown progression).
+  DJEngine.songParams = function (s, g) {
+    const prog = Theory.PROGRESSIONS.indexOf(s.prog);
+    if (prog < 0 || !s.genre) return null;
+    return {
+      seed: s.seed >>> 0, name: s.name, key: s.key, scaleType: s.scaleType, prog: prog,
+      genre: s.genre.id, bpm: s.bpm, laneMood: (s.laneMood || []).slice(), banks: !!s.banksLoaded,
+      genome: cloneGenome(g),
+    };
+  };
+
+  // Make p (from songParams, possibly hostile) the current song. Returns the
+  // song, or null if any field is out of range — nothing unchecked reaches render.
+  DJEngine.prototype.loadSong = function (p) {
+    if (!p || typeof p !== 'object') return null;
+    const g = p.genome;
+    const int = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
+    const ints = (a, lo, hi) => Array.isArray(a) && a.length === 7 && a.every((v) => int(v, lo, hi));
+    const bools = (a) => Array.isArray(a) && a.length === 7 && a.every((v) => typeof v === 'boolean');
+    const genre = Theory.GENRES.find((x) => x.id === p.genre);
+    const scales = [];
+    Theory.GENRES.forEach((x) => Theory.scalesFor(x).forEach((sc) => { if (scales.indexOf(sc) < 0) scales.push(sc); }));
+    const ok = genre && int(p.seed, 0, 0xffffffff) && typeof p.name === 'string' &&
+      Theory.ROOTS.indexOf(p.key) >= 0 && scales.indexOf(p.scaleType) >= 0 &&
+      int(p.prog, 0, Theory.PROGRESSIONS.length - 1) && int(p.bpm, 40, 240) &&
+      Array.isArray(p.laneMood) && p.laneMood.length === 7 &&
+      p.laneMood.every((v) => typeof v === 'number' && v >= -1 && v <= 1) &&
+      g && typeof g === 'object' && bools(g.active) && ints(g.variant, 0, 1e6) &&
+      int(g.energyIdx, 0, ENERGY_STEPS.length - 1) && int(g.bank, 0, Math.max(0, BANKS.length - 1)) &&
+      ints(g.fx, 0, 15) && bools(g.double) && int(g.fill, 0, FILL_NAMES.length - 1);
+    if (!ok) return null;
+    const s = this.newSong();
+    s.seed = p.seed >>> 0;
+    s.rng = Rng.make(s.seed);
+    s.name = p.name.slice(0, 80);
+    s.key = p.key; s.scaleType = p.scaleType; s.genre = genre;
+    s.prog = Theory.PROGRESSIONS[p.prog];
+    s.bpm = p.bpm; s.cps = s.bpm / 240;
+    s.laneMood = p.laneMood.slice();
+    s.banksLoaded = !!p.banks;
+    restoreGenome(s.genome, g);
+    this._lastSig = null;
+    return s;
+  };
+
   // ---- snapshot for UI/viz ----------------------------------------------
 
   DJEngine.prototype.state = function () {
@@ -1346,6 +1454,7 @@
     s.vprop = 0;      // proposals made this session (drives the tabu spacing)
     s.pending = null;
     s.voteLog = [];
+    s.kept = [];      // restore points, one per kept change (undo / history)
   };
 
   // Propose (and apply) one change for the human to judge. Returns
@@ -1451,8 +1560,94 @@
       pick.desc = g.fill ? 'drop in ' + FILL_NAMES[g.fill] : 'drop in a fill';
     }
     s.vtabu[pick.kind + ':' + pick.layer] = s.vprop + 2; // hold this move (kind+lane) out of the next couple of pitches
-    s.pending = { snapshot: snapshot, desc: pick.desc, layer: pick.layer, dir: pick.dir, kind: pick.kind, banKey: pick.banKey };
-    return { desc: pick.desc, layer: pick.layer, dir: pick.dir, kind: pick.kind };
+    s.pending = { snapshot: snapshot, desc: pick.desc, layer: pick.layer, dir: pick.dir, kind: pick.kind, banKey: pick.banKey, bit: pick.bit, take: 1 };
+    return { desc: pick.desc, layer: pick.layer, dir: pick.dir, kind: pick.kind, take: 1 };
+  };
+
+  // FX bits a lane could still take on a retake: not on the committed lane,
+  // not banned, and not the take being replaced.
+  function freshFxBits(s, layer, notBit) {
+    return FX_BITS.filter((b) => b !== notBit && !(s.pending.snapshot.fx[layer] & b) && !s.banned['fx:' + layer + ':' + b]);
+  }
+
+  // Can the pending pitch be re-cut as another take of the same idea? Adds,
+  // reworks and fills always can; an FX pitch can while the lane has another
+  // effect free. Drops and doubles have only one version.
+  DJEngine.prototype.canRetake = function () {
+    const s = this.song;
+    const p = s && s.pending;
+    if (!p) return false;
+    if (p.kind === 'add' || p.kind === 'reshape' || p.kind === 'fill') return true;
+    if (p.kind === 'fx') return freshFxBits(s, p.layer, p.bit).length > 0;
+    return false;
+  };
+
+  // "Another take": swap the pending pitch for a different version of the
+  // same idea — a new pattern for the same part, another effect on the same
+  // lane, a different fill. Nothing is banned or spaced out (you didn't say no
+  // to the idea, just to that version). Returns the new change, or null.
+  DJEngine.prototype.retakeChange = function () {
+    if (!this.canRetake()) return null;
+    const s = this.song, g = s.genome, r = s.rng, p = s.pending;
+    const l = p.layer;
+    const prevVariant = g.variant[l];
+    const prevFill = g.fill;
+    const prevCode = this.render();
+    restoreGenome(g, p.snapshot);
+    if (p.kind === 'add' || p.kind === 'reshape') {
+      // some variants render alike (a lane cycles a handful of patterns), so
+      // step on until the take actually sounds different
+      g.active[l] = true;
+      let v = prevVariant;
+      for (let tries = 0; tries < 8; tries++) {
+        v += 1 + Rng.int(r, 0, 2);
+        g.variant[l] = v;
+        if (this.render() !== prevCode) break;
+      }
+    } else if (p.kind === 'fx') {
+      p.bit = Rng.pick(r, freshFxBits(s, l, p.bit));
+      g.fx[l] |= p.bit;
+      p.banKey = 'fx:' + l + ':' + p.bit;
+      p.desc = 'add ' + FX_NAMES[p.bit] + ' to ' + STAGES[l].label;
+    } else if (p.kind === 'fill') {
+      const others = [1, 2, 3].filter((f) => f !== prevFill);
+      g.fill = Rng.pick(r, others);
+      p.desc = 'drop in ' + FILL_NAMES[g.fill];
+    }
+    p.take = (p.take || 1) + 1;
+    return { desc: p.desc, layer: l, dir: p.dir, kind: p.kind, take: p.take };
+  };
+
+  // Put the pending pitch back without judging it (no ban, no vote) — used
+  // before an undo, a restore, or a re-skin.
+  DJEngine.prototype.discardPending = function () {
+    const s = this.song;
+    if (!s || !s.pending) return false;
+    restoreGenome(s.genome, s.pending.snapshot);
+    s.pending = null;
+    return true;
+  };
+
+  // Undo the last kept change. Returns { desc } of what came off, or null.
+  DJEngine.prototype.undoKeep = function () {
+    const s = this.song;
+    if (!s || !s.kept || !s.kept.length) return null;
+    this.discardPending();
+    const e = s.kept.pop();
+    restoreGenome(s.genome, e.before);
+    return { desc: e.desc, index: s.kept.length };
+  };
+
+  // Go back to just after keep #i (0-based); -1 = before the first keep.
+  // Later keeps come off. Returns whether anything changed.
+  DJEngine.prototype.restoreKeep = function (i) {
+    const s = this.song;
+    if (!s || !s.kept || !s.kept.length || i >= s.kept.length - 1 && !s.pending) return false;
+    this.discardPending();
+    if (i < 0) { restoreGenome(s.genome, s.kept[0].before); s.kept = []; return true; }
+    restoreGenome(s.genome, s.kept[i].after);
+    s.kept.length = i + 1;
+    return true;
   };
 
   // Keep the pitched change (it's already applied). Returns the uniform change
@@ -1463,7 +1658,9 @@
     const p = s.pending;
     s.pending = null;
     (s.voteLog = s.voteLog || []).push({ v: 'up', desc: p.desc });
-    return { desc: p.desc, layer: p.layer, kind: p.kind, dir: p.dir };
+    // a restore point: the track before and after this keep (undo / history)
+    (s.kept = s.kept || []).push({ desc: p.desc, before: cloneGenome(p.snapshot), after: cloneGenome(s.genome) });
+    return { desc: p.desc, layer: p.layer, kind: p.kind, dir: p.dir, index: s.kept.length - 1 };
   };
 
   // Kill the pitched change: revert the genome and ban this idea for the song.

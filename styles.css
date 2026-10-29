@@ -60,7 +60,7 @@ body[data-view="menu"] .view-menu { height: 100%; }
   text-align: right;
 }
 
-/* ── stage layout: rig · console (top) / floor · code (bottom) ────────── */
+/* ── stage layout: rig (top) / floor (bottom) · steer + live code (right) ─ */
 .stage {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) minmax(270px, 0.8fr);
@@ -69,9 +69,8 @@ body[data-view="menu"] .view-menu { height: 100%; }
   height: calc(100% - var(--topbar-h));
 }
 .rig { grid-column: 1; grid-row: 1; }
-.console { grid-column: 2; grid-row: 1; }
+.console { grid-column: 2; grid-row: 1 / span 2; }
 .floor { grid-column: 1; grid-row: 2; }
-.codepanel { grid-column: 2; grid-row: 2; }
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -88,7 +87,7 @@ body[data-view="menu"] .view-menu { height: 100%; }
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .track-meta { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
-.deck-buttons { display: flex; gap: 8px; flex-shrink: 0; }
+.deck-buttons { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 1; min-width: 0; }
 
 /* the DJ's status, compact (was its own panel) */
 .now-mini {
@@ -250,25 +249,6 @@ body[data-view="menu"] .view-menu { height: 100%; }
 .ctrl-title { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
 .ctrl-title small { text-transform: none; letter-spacing: 0; font-weight: normal; opacity: 0.75; margin-left: 6px; }
 
-/* part mixer: one channel strip per lane — an explicit drop / auto / feature choice */
-.part-mix { display: flex; flex-direction: column; gap: 5px; }
-.pm-row { display: grid; grid-template-columns: 58px 1fr; align-items: center; gap: 8px; }
-.pm-key { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
-.pm-seg {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px;
-  background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 3px;
-}
-.pm-btn {
-  font-family: var(--font); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.4px;
-  color: var(--muted); background: transparent; border: 0; border-radius: 6px;
-  padding: 5px 2px; cursor: pointer; transition: color .12s, background .12s, box-shadow .12s;
-}
-.pm-btn:hover { color: var(--ink); }
-.pm-btn.on { color: #0a0a12; font-weight: 700; }
-.pm-seg .pm-btn.on:first-child { background: var(--hot); box-shadow: 0 0 12px -2px var(--hot); }        /* drop */
-.pm-seg .pm-btn.on:nth-child(2) { background: #3a3a52; color: var(--ink); }                              /* auto */
-.pm-seg .pm-btn.on:last-child { background: var(--pm, var(--good)); box-shadow: 0 0 12px -2px var(--pm, var(--good)); } /* feature */
-
 .density-block { margin-top: 14px; }
 .density { width: 100%; accent-color: var(--warm); cursor: ew-resize; }
 .density-scale { display: flex; justify-content: space-between; font-size: 9.5px; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -298,7 +278,7 @@ body[data-view="menu"] .view-menu { height: 100%; }
 .feed-head { font-size: 9.5px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-top: 4px; }
 .feed { list-style: none; margin: 0; padding: 0; overflow: auto; flex: 1 1 auto; min-height: 44px; }
 .feed-row {
-  display: grid; grid-template-columns: 16px 1fr auto; gap: 7px; align-items: baseline;
+  display: grid; grid-template-columns: 16px 1fr auto auto; gap: 7px; align-items: baseline;
   padding: 4px 2px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); font-size: 11px;
 }
 .feed-row.fresh { animation: feedflash 1s ease; }
@@ -706,6 +686,13 @@ body.visuals-open { overflow: hidden; }
   .rx-rig { grid-template-columns: 1fr; }
   .rx-master { gap: 10px; }
   .status { display: none; }
+  /* phones: nothing may push the page wider than the screen */
+  .topbar { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+  .transport { max-width: 100%; min-width: 0; }
+  .player-viz { display: none; }
+  .code { overflow-wrap: anywhere; }
+  .deck-buttons .btn { flex: 1 1 auto; }
+  kbd, .key-hint { display: none; }
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -923,3 +910,88 @@ input[type="range"]:focus-visible {
 @media (pointer: coarse) {
   .crate-actions button, .btn.small { min-width: 40px; min-height: 40px; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE LOOP, TIGHTENED — key hints, another take, undo, let it run, the code
+   diff, part chips as steer buttons, the Steer column and the first-run tips. */
+
+/* keyboard hints on the buttons that have a shortcut */
+kbd {
+  font-family: var(--sr-mono, ui-monospace, monospace); font-size: 9.5px; font-weight: 600;
+  padding: 0 4px; margin-left: 6px; border-radius: 3px;
+  border: 1px solid currentColor; opacity: .55; vertical-align: 1px; letter-spacing: 0;
+}
+.abpick-hint kbd { margin: 0 2px; }
+
+/* another take: under the two verdicts, full width, quieter */
+.sg-actions .sg-retake { grid-column: 1 / -1; background: transparent; border: 1px solid var(--line); color: var(--ink); font-weight: 600; padding: 8px; }
+.sg-actions .sg-retake:disabled { opacity: .35; }
+.auto-note { font-size: 11.5px; color: var(--warm); text-align: center; font-variant-numeric: tabular-nums; }
+.auto-btn.on { border-color: var(--warm); color: var(--warm); background: rgba(255, 176, 60, 0.1); }
+
+/* part chips are the per-part steer: click cycles DJ decides → feature → drop */
+button.chip { font-family: inherit; cursor: pointer; background: transparent; }
+button.chip:hover { opacity: 1; color: var(--ink); }
+button.chip:focus-visible { outline: 2px solid var(--cool); outline-offset: 2px; }
+.chip.feat::before { content: '★ '; }
+.chip.drop { text-decoration: line-through; }
+.chip.drop::before { content: '✕ '; text-decoration: none; display: inline-block; }
+
+/* the Steer column: direction box on top, genre/density folded, live code filling the rest */
+.console > h3 { margin-bottom: 4px; }
+.steer-hint { margin: 6px 0 0; font-size: 11px; color: var(--muted); line-height: 1.45; }
+.steer-more > summary { cursor: pointer; list-style: none; margin: 0; }
+.steer-more > summary::-webkit-details-marker { display: none; }
+.steer-more > summary::before { content: '▸ '; }
+.steer-more[open] > summary::before { content: '▾ '; }
+.steer-more[open] > summary { margin-bottom: 10px; }
+.console .codepanel { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 220px; margin-top: 12px; }
+.code-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.code-head h3 { flex: 1; }
+
+/* the code diff: what the change takes out (−) and brings in (+) */
+.sg-mark { display: inline-block; width: 1.4em; color: var(--muted); user-select: none; }
+.sg-add { background: color-mix(in srgb, var(--lane, var(--good)) 14%, transparent); border-left-color: var(--lane, var(--good)); }
+.sg-add .sg-mark { color: var(--good); font-weight: 700; }
+.sg-del { background: rgba(232, 69, 69, 0.08); border-left-color: rgba(232, 69, 69, 0.6); opacity: .7; text-decoration: line-through; text-decoration-color: rgba(232, 69, 69, 0.6); }
+.sg-del .sg-mark { color: #e84545; font-weight: 700; text-decoration: none; }
+.sg-note { color: var(--muted); font-style: italic; }
+
+/* set history: each kept change is a restore point */
+.frestore {
+  font: inherit; font-size: 11px; line-height: 1; cursor: pointer; padding: 2px 6px;
+  border-radius: 4px; border: 1px solid var(--line); background: transparent; color: var(--muted);
+}
+.frestore:hover { color: var(--ink); border-color: var(--cool); }
+.feed-row.undone .fmsg { text-decoration: line-through; opacity: .5; }
+.feed-row.undone .fwhy, .feed-row.undone .fglyph { color: var(--muted); }
+.feed-head small { text-transform: none; letter-spacing: 0; opacity: .75; margin-left: 4px; }
+
+/* Remix only shows in the navigation once there are two records to mix */
+[data-remix-link][hidden] { display: none !important; }
+
+/* a record that just arrived from a share link */
+.crate-item.fresh { border-color: var(--cool); box-shadow: 0 0 0 1px var(--cool); }
+
+/* first-run tips: one small pointer at a time */
+.coach {
+  position: absolute; z-index: 60; width: min(300px, calc(100vw - 16px));
+  background: #10141a; color: #e8ecf2; border: 1px solid var(--cool); border-radius: 8px;
+  padding: 12px 14px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55); font-size: 13px; line-height: 1.45;
+}
+.coach[hidden] { display: none; }
+.coach p { margin: 0 0 10px; }
+.coach-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.coach-target { outline: 2px solid var(--cool); outline-offset: 3px; border-radius: 6px; }
+
+/* Live (workstation) skin for the new pieces */
+body[data-view="live"] button.chip:hover { color:var(--sr-bright); border-color:var(--sr-border-hi); }
+body[data-view="live"] .chip.feat { color:var(--sr-green); border-color:var(--sr-green); background:rgba(62,207,114,.1); }
+body[data-view="live"] .chip.drop { color:var(--sr-red); border-color:var(--sr-red); background:rgba(232,69,69,.08); }
+body[data-view="live"] .sg-actions .sg-retake { border:1px solid var(--sr-border-hi); background:var(--sr-surface); color:var(--sr-text); font-size:12px; padding:8px; }
+body[data-view="live"] .auto-btn.on { border-color:var(--sr-b); color:var(--sr-b); background:rgba(255,155,47,.1); }
+body[data-view="live"] .auto-note { color:var(--sr-b); }
+body[data-view="live"] .coach { border-color:var(--sr-a); border-radius:3px; }
+body[data-view="live"] .coach-target { outline-color:var(--sr-a); }
+body[data-view="live"] .console .codepanel h3 { border-bottom:none; margin:0; padding:0; }
+body[data-view="live"] .code-head { border-bottom:1px solid var(--sr-border); margin-bottom:8px; padding-bottom:6px; }

@@ -18,7 +18,7 @@
       <a data-nav="menu" href="#menu">Menu</a>
       <a data-nav="live" href="#live">Live</a>
       <a data-nav="crate" href="#crate">Crate</a>
-      <a data-nav="remix" href="#remix">Remix</a>
+      <a data-nav="remix" href="#remix" data-remix-link hidden>Remix</a>
     </nav>
     <!-- the live player: a shared reactive visualiser + now-playing + one stop -->
     <div id="transport" class="transport player" hidden>
@@ -41,7 +41,7 @@
       <nav class="menu-channels" id="menuChannels" aria-label="Main menu">
         <a class="channel" href="#live">Live Set</a>
         <a class="channel" href="#crate">Crate</a>
-        <a class="channel" href="#remix">Remix</a>
+        <a class="channel" href="#remix" data-remix-link hidden>Remix</a>
         <a class="channel" href="#" data-action="visuals">Visuals</a>
       </nav>
     </div>
@@ -56,16 +56,11 @@
           <h2 id="trackName">—</h2>
           <p id="trackMeta" class="track-meta">press start to begin</p>
         </div>
-        <div id="djNow" class="now-mini">
-          <span class="spinner"></span>
-          <div>
-            <div id="djVerb" class="now-verb">warming up</div>
-            <div id="djMove" class="now-move">press start to begin…</div>
-          </div>
-        </div>
         <div class="deck-buttons">
           <button id="startBtn" class="btn primary">Start the set</button>
-          <button id="saveBtn" class="btn save-any" title="Save the track as it stands right now to your crate. Works any time; it doesn't have to be finished." disabled><span aria-hidden="true">◉</span> Save track</button>
+          <button id="saveBtn" class="btn save-any" title="Save the track as it stands right now to your crate. Works any time; it doesn't have to be finished. (S)" disabled><span aria-hidden="true">◉</span> Save track <kbd>S</kbd></button>
+          <button id="undoBtn" class="btn ghost" title="Take back the last change you kept (Z or Ctrl+Z)" disabled><span aria-hidden="true">↶</span> Undo <kbd>Z</kbd></button>
+          <button id="autoBtn" class="btn ghost auto-btn" aria-pressed="false" title="Let it run: the DJ keeps each change after 8 bars unless you step in (L)"><span aria-hidden="true">⟳</span> Let it run <kbd>L</kbd></button>
           <button id="skipBtn" class="btn ghost" title="Start a fresh track">New track</button>
         </div>
       </div>
@@ -74,7 +69,8 @@
 
       <div id="sgEmpty" class="sg-empty">Press Start. The DJ suggests one change at a time on
         Deck&nbsp;B. Click <b>Without</b> / <b>With</b> to hear the track both ways, then
-        <b>Keep</b> or <b>Bin</b> the change. Hit <b>◉ Save track</b> whenever you like.</div>
+        <b>Keep</b> or <b>Bin</b> the change. Hit <b>◉ Save track</b> whenever you like.
+        Click a part above to feature or drop it.</div>
 
       <div id="deckRig" class="deck-rig" hidden>
         <div class="tdeck tdeck-a">
@@ -93,7 +89,7 @@
             <span class="abpick-play" aria-hidden="true">▶</span>
             <span class="abpick-text"><b>With</b> the change<small>Deck B · the suggestion</small></span>
           </button>
-          <div class="abpick-hint">Click either one to switch. The lit one is playing.</div>
+          <div class="abpick-hint">Click either one<span class="key-hint">, or press <kbd>Space</kbd>,</span> to switch. The lit one is playing. Both play at the same loudness.</div>
         </div>
 
         <div class="tdeck tdeck-b">
@@ -105,37 +101,53 @@
             <div class="sg-ask" id="sgAsk">Keep this change?</div>
           </div>
           <div id="sgActions" class="sg-actions" hidden>
-            <button id="sgSkip" class="btn vote-down">✗ Bin the change</button>
-            <button id="sgApprove" class="btn vote-up">✓ Keep the change</button>
+            <button id="sgSkip" class="btn vote-down">✗ Bin the change <kbd>X</kbd></button>
+            <button id="sgApprove" class="btn vote-up">✓ Keep the change <kbd>K</kbd></button>
+            <button id="sgRetake" class="btn sg-retake" title="Same idea, a different version. Nothing gets binned. (R)">↻ Another take <kbd>R</kbd></button>
           </div>
+          <div id="autoNote" class="auto-note" hidden aria-live="polite"></div>
           <div id="sgSaveHint" class="sg-save-hint" hidden>Happy with it as is? <b>◉ Save track</b> at the top saves it any time.</div>
         </div>
       </div>
 
     </section>
 
-    <!-- ── THE CONSOLE: dials that bias what the DJ pitches next ─────────── -->
+    <!-- ── STEER: one place to tell the DJ what you want, and the live code ── -->
     <aside class="console panel">
-      <h3>The console</h3>
+      <h3>Steer the DJ</h3>
 
+      <!-- the direction box: optional free text that steers what the DJ pitches -->
       <div class="ctrl-block">
+        <div class="curate">
+          <input id="curateInput" class="curate-input" type="text" maxlength="120" spellcheck="false"
+                 placeholder="e.g. no hi-hats, darker, slower"
+                 aria-label="directions for the DJ" />
+          <div id="curateChips" class="curate-chips" aria-live="polite"></div>
+        </div>
+        <p class="steer-hint">Or click a part at the top of the deck: DJ decides → <b>feature</b> → <b>drop</b>.</p>
+      </div>
+
+      <details class="ctrl-block steer-more">
+        <summary class="ctrl-title">Genre &amp; density</summary>
         <h4 class="ctrl-title">Genre <small>new tracks come out in this style</small></h4>
         <div id="liveGenrePills" class="genre-pills" role="radiogroup" aria-label="genre for new tracks"></div>
-      </div>
+        <!-- density: one dial — how busy the arrangement gets -->
+        <div class="density-block">
+          <h4 class="ctrl-title">Density <small>how many layers</small></h4>
+          <input id="liveDensity" class="density" type="range" min="-100" max="100" value="0"
+                 aria-label="density dial: strip back to pile on" />
+          <div class="density-scale"><span>strip</span><span>hold</span><span>pile on</span></div>
+        </div>
+      </details>
 
-      <!-- density: one dial — how busy the arrangement gets -->
-      <div class="ctrl-block density-block">
-        <h4 class="ctrl-title">Density <small>how many layers</small></h4>
-        <input id="liveDensity" class="density" type="range" min="-100" max="100" value="0"
-               aria-label="density dial: strip back to pile on" />
-        <div class="density-scale"><span>strip</span><span>hold</span><span>pile on</span></div>
-      </div>
-
-      <!-- the parts: one channel strip each — drop / auto / feature -->
-      <div class="ctrl-block">
-        <h4 class="ctrl-title">The parts <small>drop · auto · feature</small></h4>
-        <div id="livePartMix" class="part-mix" aria-label="per-part emphasis"></div>
-      </div>
+      <!-- the live Strudel the DJ is running; while a change is up it shows the diff -->
+      <section class="codepanel">
+        <div class="code-head">
+          <h3><span aria-hidden="true">&lt;/&gt;</span> The live code</h3>
+          <button id="codeOpen" class="btn small ghost" title="Open your track (as kept so far) in the Strudel editor">↗ Open in Strudel</button>
+        </div>
+        <pre id="code" class="code" aria-label="live Strudel code">// the DJ hasn't started yet</pre>
+      </section>
     </aside>
 
     <!-- ── FLOOR: the live pianoroll + a compact set history ─────────────── -->
@@ -155,44 +167,32 @@
             <button id="logClear" class="btn small ghost" title="Clear the captured trace">clear</button>
           </div>
         </div>
-        <div class="feed-head">Kept · skipped</div>
+        <div class="feed-head">Kept · binned <small>↶ goes back</small></div>
         <ul id="djFeed" class="feed"></ul>
         <!-- the mini visualiser: the shared scene system as a calm little tile -->
         <div class="mini-viz"><canvas id="liveViz" aria-hidden="true"></canvas></div>
       </aside>
     </section>
 
-    <!-- ── CODE: the live Strudel the DJ is running, syntax-highlighted ──── -->
-    <section class="codepanel panel">
-      <h3><span aria-hidden="true">&lt;/&gt;</span> The live code</h3>
-      <!-- the direction box: optional free text that steers what the DJ pitches -->
-      <div class="curate">
-        <input id="curateInput" class="curate-input" type="text" maxlength="120" spellcheck="false"
-               placeholder="Direction (optional) — e.g. no hi-hats, darker, slower"
-               aria-label="curation directions for the DJ" />
-        <div id="curateChips" class="curate-chips" aria-live="polite"></div>
-      </div>
-      <pre id="code" class="code" aria-label="live Strudel code">// the DJ hasn't started yet</pre>
-    </section>
   </main>
 
 
-  <!-- ══ CRATE: your record vault, its own page ══════════════════════════ -->
+  <!-- ══ CRATE: your saved tracks, its own page ══════════════════════════ -->
   <main class="view view-crate" data-view="crate" hidden>
     <section class="crate-page panel">
       <div class="crate-page-head">
-        <h2><span aria-hidden="true">🗃</span> The crate <small>your pressed records</small></h2>
+        <h2><span aria-hidden="true">🗃</span> The crate <small>your saved tracks</small></h2>
         <div class="crate-tools">
           <select id="crateSort" class="crate-sort" aria-label="sort records">
             <option value="new">Newest</option>
-            <option value="hype">Top hype</option>
+            <option value="hype">Most kept</option>
             <option value="name">A–Z</option>
           </select>
           <button id="crateExport" class="btn ghost small" title="Download the crate as JSON"><span aria-hidden="true">⬇</span> Export</button>
           <label class="btn ghost small filelabel" title="Merge in a crate JSON"><span aria-hidden="true">⬆</span> Import
             <input id="crateImport" type="file" accept="application/json,.json" hidden />
           </label>
-          <a class="btn ghost small" href="#remix"><span aria-hidden="true">🎚</span> Remix</a>
+          <a class="btn ghost small" href="#remix" data-remix-link hidden><span aria-hidden="true">🎚</span> Remix</a>
           <a class="btn ghost small" href="#live"><span aria-hidden="true">▶</span> Go live</a>
         </div>
       </div>
@@ -302,7 +302,7 @@
         </span>
         <span class="rx-nudge">Nudge<input type="range" id="nudge" min="-8" max="8" step="0.5" value="0" aria-label="tempo nudge" /><b id="nudgeVal">+0.0%</b></span>
         <span class="rx-tempo" id="tempo">— cps</span>
-        <button id="remixSave" class="btn ghost rx-press" title="Cut this blend as a new dubplate" disabled><span aria-hidden="true">◉</span> Cut to crate</button>
+        <button id="remixSave" class="btn ghost rx-press" title="Save this blend to your crate as a new record" disabled><span aria-hidden="true">◉</span> Save to crate</button>
       </div>
 
       <div class="remix-roll">
@@ -320,7 +320,7 @@
   <!-- ══ PRESS: the save moment — cut this track to a record ═════════════ -->
   <div id="pressModal" class="press-modal" hidden role="dialog" aria-modal="true" aria-labelledby="press-title">
     <div class="press-sheet">
-      <h3 id="press-title" class="press-title">Cut a dubplate</h3>
+      <h3 id="press-title" class="press-title">Save track</h3>
       <p id="pressVersion" class="press-version">—</p>
       <div class="press-disc-wrap"><div id="pressDisc" class="disc press-disc"></div></div>
       <label class="press-name-label">Name on the label
@@ -334,8 +334,17 @@
       <p id="pressFormatHint" class="pf-hint">a 36-bar journey: intro → build → peak → strip → peak → outro</p>
       <div class="press-actions">
         <button id="pressCancel" class="btn ghost">Keep working</button>
-        <button id="pressConfirm" class="btn primary">Cut to the crate</button>
+        <button id="pressConfirm" class="btn primary">Save to crate</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ══ TIPS: three pointers through the first turn (once per browser) ══ -->
+  <div id="coach" class="coach" hidden role="dialog" aria-label="Quick tips">
+    <p id="coachText"></p>
+    <div class="coach-actions">
+      <button id="coachSkip" class="btn small ghost">Skip tips</button>
+      <button id="coachNext" class="btn small primary">Next</button>
     </div>
   </div>
 

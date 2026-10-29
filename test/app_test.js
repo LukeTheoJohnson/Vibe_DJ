@@ -100,6 +100,10 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
     !!window.SDJ.menuAmbient && typeof window.SDJ.menuAmbient.start === 'function');
   check('migrated (art-less) record still gets a vinyl face',
     doc.querySelector('#crate .crate-art svg') != null);
+  check('Remix stays out of the navigation until there are two records to mix',
+    doc.querySelector('.topnav [data-remix-link]').hidden === true);
+  check('a crate that already has records gets no demo records',
+    JSON.parse(window.localStorage.getItem('sdj.crate')).every((e) => e.source !== 'demo'));
 
   // start the set — seed the engine first so the whole run is deterministic
   window.SDJ.engine.masterSeed = 0xC0FFEE;
@@ -112,10 +116,18 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
   check('code panel populated', doc.getElementById('code').textContent.includes('stack'));
   check('code highlighted with spans', doc.getElementById('code').innerHTML.includes('<span class="fn"'));
   check('stage chips rendered', doc.querySelectorAll('#stageChips .chip').length === 7);
-  // part mixer: the seven faders are replaced by a 3-state row (drop/auto/feature) per part
-  check('part mixer renders a 3-state row per part',
-    doc.querySelectorAll('#livePartMix .pm-row').length === 7 &&
-    doc.querySelectorAll('#livePartMix .pm-row:first-child .pm-btn').length === 3);
+  // part steer: the part chips are buttons — a click cycles DJ decides → feature → drop
+  const partChip = doc.querySelectorAll('#stageChips .chip')[1];
+  partChip.click();
+  const chipFeatured = partChip.classList.contains('feat') && window.SDJ.engine.song.laneMood[1] > 0.33;
+  partChip.click();
+  const chipDropped = partChip.classList.contains('drop') && window.SDJ.engine.song.laneMood[1] < -0.33;
+  partChip.click();
+  check('a part chip cycles DJ decides → feature → drop → DJ decides',
+    partChip.tagName === 'BUTTON' && chipFeatured && chipDropped &&
+    !partChip.classList.contains('feat') && !partChip.classList.contains('drop') &&
+    window.SDJ.engine.song.laneMood[1] === 0);
+  check('the seven-row part mixer is gone (one steer surface)', !doc.getElementById('livePartMix'));
 
   // unified transport + the deck rig
   check('transport shows now playing on start',
@@ -131,6 +143,8 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
   // ---- the pressing flow: saving is a deliberate record-cut, not a silent bank
   const crateBefore = crateLen();
   doc.getElementById('saveBtn').click();
+  check('the save dialog says Save track (one word for saving)',
+    doc.getElementById('press-title').textContent === 'Save track');
   check('save opens the pressing modal (nothing banked yet)',
     !doc.getElementById('pressModal').hidden && crateLen() === crateBefore);
   check('the press modal shows the disc + which version is banked',
@@ -268,6 +282,51 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
     doc.getElementById('abChange').getAttribute('aria-pressed') === 'true' &&
     doc.getElementById('abTrack').getAttribute('aria-pressed') === 'false');
   check('both switch positions stay balanced', balanced(trackOnly) && balanced(withChange));
+
+  // ---- level-matched A/B: an add is trimmed to Deck A's loudness, With side only
+  const le = new window.SDJ.DJEngine();
+  le.masterSeed = 0xC0FFEE; le.newSong(); le.voteReset();
+  let lvlAdd = false, lvlOk = false;
+  for (let k = 0; k < 20 && !lvlAdd; k++) {
+    const p = le.proposeChange();
+    if (!p) break;
+    if (p.kind === 'add') {
+      lvlAdd = true;
+      const full = le.renderAB(1), none = le.renderAB(0);
+      lvlOk = le.abLevel() < 1 && /\.postgain\(0\.\d+\)$/.test(full) &&
+        none.indexOf('postgain') < 0 && balanced(full) && balanced(le.renderAB(0.5));
+    }
+    le.acceptChange();
+  }
+  check('an add is level-matched on the With side, never on Without', lvlAdd && lvlOk);
+
+  // ---- another take: the same idea in a different version, nothing banned ----
+  const te = new window.SDJ.DJEngine();
+  te.masterSeed = 0xC0FFEE; te.newSong(); te.voteReset();
+  let tp = te.proposeChange();
+  while (tp && !te.canRetake()) { te.acceptChange(); tp = te.proposeChange(); }
+  const take1 = te.render();
+  const t2 = te.retakeChange();
+  check('another take re-cuts the same idea as a different version',
+    !!t2 && t2.kind === tp.kind && t2.layer === tp.layer && t2.take === 2 &&
+    te.render() !== take1 && balanced(te.render()));
+  check('another take bans nothing', Object.keys(te.song.banned).length === 0);
+  te.acceptChange();
+  check('a re-taken change keeps like any other', te.song.kept.length >= 1 && !te.song.pending);
+
+  // ---- undo + restore points ----
+  const ue = new window.SDJ.DJEngine();
+  ue.masterSeed = 0xC0FFEE; ue.newSong(); ue.voteReset();
+  const bareTrack = ue.render();
+  ue.proposeChange(); ue.acceptChange();
+  const afterOne = ue.render();
+  ue.proposeChange(); ue.acceptChange();
+  ue.proposeChange(); // a pitch is up when you undo
+  const undone = ue.undoKeep();
+  check('undo takes back the last keep and drops the open pitch',
+    !!undone && ue.render() === afterOne && !ue.song.pending && ue.song.kept.length === 1);
+  check('restoring to before the first keep returns the bare track',
+    ue.restoreKeep(-1) && ue.render() === bareTrack && ue.song.kept.length === 0);
 
   // the part mixer biases the DJ: marking an active part "drop" makes the DJ pitch
   // removing it (proposeChange now reads laneMood).
@@ -542,6 +601,56 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
     hushCalls > hushBefore && doc.getElementById('transport').hidden);
   check('global stop evaluates silence to override in-flight audio', silenceEvals.length > 0);
 
+  // ---- the live loop from the keyboard, the code diff, undo, let it run ----
+  window.location.hash = '#live';
+  await sleep(20);
+  if (!window.SDJ.live.pitching()) { await window.SDJ.live.start(); await sleep(20); } // a crate preview stopped the set
+  if (window.SDJ.live.pitching() === 'save') { window.SDJ.live.skip(); await sleep(10); }
+  check('a change is up for the keyboard checks', window.SDJ.live.pitching() === true);
+  if (window.SDJ.live.pitching() === true) {
+    const key = (k, opts) => doc.body.dispatchEvent(new window.KeyboardEvent('keydown', Object.assign({ key: k, bubbles: true }, opts || {})));
+    window.SDJ.ab.set(1);
+    check('With shows the change as a code diff (+ / − lines)',
+      doc.querySelectorAll('#code .sg-add, #code .sg-del').length > 0);
+    doc.getElementById('abTrack').click();
+    await sleep(5);
+    check('Without shows the committed code, no diff marks',
+      doc.querySelectorAll('#code .sg-add, #code .sg-del').length === 0 &&
+      doc.getElementById('code').textContent.includes('stack('));
+    key(' ');
+    await sleep(5);
+    check('Space switches Without → With', window.SDJ.ab.mix() === 1);
+    const keptBefore = window.SDJ.engine.song.kept.length;
+    key('k');
+    await sleep(10);
+    check('K keeps the change', window.SDJ.engine.song.kept.length === keptBefore + 1);
+    check('a kept change gets a ↶ restore point in the set history',
+      !!doc.querySelector('#djFeed li[data-keep] .frestore'));
+    check('Undo is live once something is kept', !doc.getElementById('undoBtn').disabled);
+    key('z');
+    await sleep(10);
+    check('Z undoes the keep and strikes it in the history',
+      window.SDJ.engine.song.kept.length === keptBefore && !!doc.querySelector('#djFeed li.undone'));
+    const typing = doc.getElementById('curateInput');
+    typing.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'k', bubbles: true }));
+    check('shortcuts stay out of the way while you type', window.SDJ.engine.song.kept.length === keptBefore);
+    key('k', { repeat: true });
+    await sleep(5);
+    check('a held-down K (auto-repeat) keeps nothing', window.SDJ.engine.song.kept.length === keptBefore);
+    if (window.SDJ.live.pitching() === true && window.SDJ.engine.canRetake()) {
+      key('r');
+      await sleep(5);
+      check('R plays another take and says so', doc.getElementById('sgDesc').textContent.includes('(take 2)'));
+    }
+    window.SDJ.live.auto(true);
+    check('Let it run shows its countdown',
+      !doc.getElementById('autoNote').hidden && doc.getElementById('autoBtn').getAttribute('aria-pressed') === 'true');
+    window.SDJ.live.auto(false);
+    check('turning Let it run off clears the countdown', doc.getElementById('autoNote').hidden);
+  }
+  window.location.hash = '';
+  await sleep(10);
+
   // ---- remix console: play / stop / press run last so audio doesn't disturb ----
   // the live-set assertions above. Deck A still holds the record loaded earlier.
   check('record shelf renders sleeves with load buttons',
@@ -709,6 +818,46 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
   check('a live "slower" drops the tempo', window.SDJ.engine.song.bpm < bpmBeforeCur,
     bpmBeforeCur + ' -> ' + window.SDJ.engine.song.bpm);
   window.SDJ.curate.clear();
+
+  // ---- sharing: a link that carries a record, and Open in Strudel ----
+  const shareRec = window.SDJ.demoRecords()[1];
+  const link = window.SDJ.share.link(shareRec);
+  const enc = link.split('#play=')[1];
+  const sent = JSON.parse(Buffer.from(decodeURIComponent(enc), 'base64').toString('utf8'));
+  check('a share link carries the song’s parameters, never code',
+    !!enc && link.indexOf('http://localhost/') === 0 && !('code' in sent) && !JSON.stringify(sent).includes('stack('));
+  const crateBeforeShare = crateLen();
+  const landed = window.SDJ.share.open(enc);
+  check('opening a share link re-renders the very same record',
+    !!landed && landed.code === shareRec.code && landed.name === shareRec.name &&
+    landed.source === 'shared' && crateLen() === crateBeforeShare + 1);
+  window.SDJ.share.open(enc);
+  check('opening the same link twice doesn’t duplicate it', crateLen() === crateBeforeShare + 1);
+  const hostile = (p) => encodeURIComponent(Buffer.from(JSON.stringify(p), 'utf8').toString('base64'));
+  const evil = JSON.parse(JSON.stringify(sent));
+  evil.code = 'fetch("//evil")';
+  evil.p.genome.bank = '0).fetch("//evil")//';
+  check('a link with a tampered genome is refused', window.SDJ.share.open(hostile(evil)) === null);
+  const smuggle = JSON.parse(JSON.stringify(sent));
+  smuggle.code = 'fetch("//evil")';
+  smuggle.p.name = 'Smuggler';
+  const sm = window.SDJ.share.open(hostile(smuggle));
+  check('code smuggled into a link is ignored (the record is re-rendered)',
+    !!sm && !sm.code.includes('evil'));
+  check('a record without parameters (e.g. a remix) offers no share link',
+    window.SDJ.share.link({ name: 'x', code: 's("bd")' }) === null);
+  check('Open in Strudel puts the code in strudel.cc’s hash',
+    window.SDJ.share.strudel('s("bd")') === 'https://strudel.cc/#' + encodeURIComponent(window.btoa('s("bd")')));
+  check('Remix is in the navigation once there are two records',
+    doc.querySelector('.topnav [data-remix-link]').hidden === false);
+
+  // ---- demo records: a first visit lands on a crate with music in it ----
+  const demos = window.SDJ.demoRecords();
+  check('three demo records, each a balanced arranged track with a genome',
+    demos.length === 3 && demos.every((d) => balanced(d.code) && d.code.includes('arrange(') &&
+      balanced(d.loopCode) && !!d.genome && d.source === 'demo'));
+  check('demo records are deterministic',
+    JSON.stringify(window.SDJ.demoRecords().map((d) => d.code)) === JSON.stringify(demos.map((d) => d.code)));
 
   // ---- lane-index coupling: lane words span exactly SDJ.STAGES (T-12) -----
   // LANE_NAMES isn't exported, so infer the highest lane index the parser can

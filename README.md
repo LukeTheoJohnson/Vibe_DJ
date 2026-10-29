@@ -5,8 +5,8 @@
 **Vibe DJ** is an AI DJ that **cuts tracks live in [Strudel](https://strudel.cc) code**
 while you steer, turn by turn. It authors every note; you only supply *taste*. Every track
 is a **record being cut**: each part you approve presses a coloured groove-ring onto the
-disc spinning on Deck A, and when you keep one it’s a **dubplate** — a one-off cut, its
-name and colours stuck, dropped into your crate for good.
+disc spinning on Deck A, and when you save one its name and colours stick and it drops
+into your crate for good.
 
 **[▶ Play it live](https://luketheojohnson.github.io/Vibe_DJ/)** &nbsp;·&nbsp;
 No backend · no framework · no bundler · no build step &nbsp;·&nbsp; MIT-licensed
@@ -26,21 +26,25 @@ test pressing — a translucent disc in the touched part's colour, wearing the k
 (`+` new part, `−` drop, `≈` rework, `✦` effect, `≡` double, `▲` fill). The committed track
 spins on **Deck A**, its record filling with a coloured ring per approved part.
 
-The bit that matters: the **crossfader** between the decks drives `engine.renderAB(mix)` —
-one balanced Strudel program that carries *both* versions of the touched lane at
-complementary gains. Slide it and you literally hear the change blend in and out against
-the current track before you judge it. **✓ Approve** presses the change onto the record;
-**✗ Skip** bins it (a skipped instrument stays out for the song).
+The bit that matters: **Without / With** between the decks switches
+`engine.renderAB(mix)` — one balanced Strudel program that carries *both* versions of
+every lane the change touches. Both sides play at the **same loudness** (an added part is
+trimmed to match, so "louder" can't win the comparison). **✓ Keep** presses the change
+onto the record, **✗ Bin** throws it out, and **↻ Another take** tries a different
+version of the same idea. Every keep is a restore point: **↶ Undo**, or go back to any
+row in the set history. **⟳ Let it run** keeps each change after 8 bars if you'd rather
+just listen. The whole loop runs from the keyboard (Space · K · X · R · S · Z · L).
 
-The **console** on the right biases what gets pitched next — genre pills, a density dial,
-and a per-part channel strip (drop / auto / feature). Below, **the roll** (Strudel's own
-[`.pianoroll()`](https://strudel.cc/learn/visual-feedback/)) scrolls the notes with each
-layer on its own coloured lane, next to a compact set history. The live code still exists —
-tucked into a `</>` drawer, with the pitched lane's lines tinted.
+**Steer the DJ** on the right: type what you want ("no hi-hats, darker, slower"), click a
+part chip to feature or drop it, or open genre & density. Under that, the live code
+shows each suggestion as a **diff** — the lines it takes out and brings in — and
+**↗ Open in Strudel** hands your track to the Strudel editor. Below, **the roll**
+(Strudel's own [`.pianoroll()`](https://strudel.cc/learn/visual-feedback/)) scrolls the
+notes with each layer on its own coloured lane, next to the set history.
 
-### ◉ Cutting — saving cuts a dubplate
+### ◉ Saving a track
 
-When the arrangement is full (or you hit **◉ Save track** any time), the press modal
+When the arrangement is full (or you hit **◉ Save track** any time), the save dialog
 opens: the disc spins with its accreted colours, you **imprint the name on the label**
 (it updates live as you type), and the modal states exactly **which version is banked** —
 always the *approved* track; an un-judged pitch on Deck B is left off
@@ -53,11 +57,12 @@ the crate wearing its approve-rate. From the save prompt, the DJ then rolls a fr
 
 ### 🗃 The Crate
 
-A standalone player and your vault. Every saved track is a full **dubplate** with a vinyl face,
-genome snapshot, cover seed, and metadata persisted in `localStorage` and portable via
-Export/Import JSON. Spin, imprint the label, send
-to Remix, **export to MP3** (⬇ — a real-time render captured and encoded in-browser), or
-delete. Because every track is seeded, a record's code is fully reproducible.
+A standalone player for your saved tracks. Each one has a vinyl face, genome snapshot,
+cover seed and metadata, persisted in `localStorage` and portable via Export/Import JSON.
+Spin it, rename it, send it to Remix, **export to MP3** (⬇, a real-time render encoded
+in-browser), **🔗 copy a share link** (the record rides in the URL, no server), or
+**↗ open it in Strudel**. A first visit starts with three demo records. Because every
+track is seeded, a record's code is fully reproducible.
 
 ![The crate — pressed records with their coloured rings, key, tempo and keep-rate](screenshots/04-crate.png)
 
@@ -68,7 +73,8 @@ the platters. A **32-bar phrase timeline** is the clock: **ARM** a transition an
 quantised on the next 8/16/32-bar line (slam or auto-fade). Each deck splits into **stems**
 (drums · bass · chords · lead · air) you can mute, solo or **swap** across decks, each with
 its own filter sweep; three **hold-to-fire paddles** (stutter / gate / echo) ride the master
-over an equal-power crossfader. Press the blend and it banks as a new dubplate.
+over an equal-power crossfader. Save the blend and it lands in the crate as a new record.
+Remix appears in the navigation once your crate has two records to mix.
 
 ![The remix deck — two records on the phrase clock, per-deck stems and filters, hold-to-fire paddles on the master](screenshots/05-remix.png)
 

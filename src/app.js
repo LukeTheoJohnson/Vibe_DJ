@@ -78,8 +78,10 @@
       // deck production controls + unified transport
       'saveBtn', 'transport', 'tpKind', 'tpName', 'tpStop',
       // the DJ's suggestion card + tuning (genre pills, density, part mixer) + status
-      'sgEmpty', 'sgCard', 'sgKind', 'sgDesc', 'sgAsk', 'sgActions', 'sgApprove', 'sgSkip', 'sgSaveHint',
-      'livePartMix', 'liveDensity', 'liveGenrePills',
+      'sgEmpty', 'sgCard', 'sgKind', 'sgDesc', 'sgAsk', 'sgActions', 'sgApprove', 'sgSkip', 'sgRetake', 'sgSaveHint',
+      'liveDensity', 'liveGenrePills',
+      // undo, lean-back mode, open-in-Strudel, the first-run tips
+      'undoBtn', 'autoBtn', 'autoNote', 'codeOpen', 'coach', 'coachText', 'coachNext', 'coachSkip',
       // the direction box (free-text curation above the live code)
       'curateInput', 'curateChips',
       'djNow', 'djVerb', 'djMove', 'djFeed',
@@ -121,9 +123,23 @@
     if (el.tpStop) el.tpStop.addEventListener('click', stopPlayback);
     if (el.sgApprove) el.sgApprove.addEventListener('click', () => liveDecide(true));
     if (el.sgSkip) el.sgSkip.addEventListener('click', () => liveDecide(false));
+    if (el.sgRetake) el.sgRetake.addEventListener('click', liveRetake);
+    if (el.undoBtn) el.undoBtn.addEventListener('click', liveUndo);
+    if (el.autoBtn) el.autoBtn.addEventListener('click', () => setAuto(!autoRun));
+    if (el.codeOpen) el.codeOpen.addEventListener('click', () => {
+      if (engine.song) openInStrudel(engine.renderCommitted());
+    });
+    // set history: a kept row's ↶ goes back to the track as it was there
+    if (el.djFeed) el.djFeed.addEventListener('click', (e) => {
+      const b = e.target.closest && e.target.closest('.frestore');
+      if (b) restoreTo(+b.closest('li').dataset.keep);
+    });
+    if (el.coachNext) el.coachNext.addEventListener('click', () => coachAdvance());
+    if (el.coachSkip) el.coachSkip.addEventListener('click', coachDone);
+    document.addEventListener('keydown', onLiveKey);
     // the A/B pick: hear the track without (A) or with (B) the pitched change
-    if (el.abTrack) el.abTrack.addEventListener('click', () => setAbMix(0));
-    if (el.abChange) el.abChange.addEventListener('click', () => setAbMix(1));
+    if (el.abTrack) el.abTrack.addEventListener('click', () => { setAbMix(0); coachAdvance(0); });
+    if (el.abChange) el.abChange.addEventListener('click', () => { setAbMix(1); coachAdvance(0); });
     // the full-screen pure-visual overlay closes on a click anywhere
     if (el.visualStage) el.visualStage.addEventListener('click', closeVisuals);
     // the top-bar live player — the shared reactive visualiser as a compact strip
@@ -157,6 +173,7 @@
     buildControls();
     installAudioTap();
     resetMind();
+    seedDemos();
     renderCrate();
     renderRemixShelf();
     syncDeckButtons();
@@ -227,7 +244,8 @@
     updateLogStat();
     freshTrack('set');
     logEvent('🎧 ' + engine.song.name + ' — cutting a fresh record from the kick up…');
-    setStatus('Live. Blend each pitch on the fader, then approve or skip.');
+    setStatus('Live. Compare each change Without / With, then keep or bin it.');
+    coachStart();
   }
 
   function stopSet() {
@@ -238,6 +256,8 @@
     syncDeckButtons();
     stopAll(); // hush + clear the transport
     clearRoll(); // wipe the roll so a later preview/session doesn't scroll stale notes
+    armAuto();   // not running any more — clears the lean-back countdown
+    coachRender();
     if (SDJ.SetLog) SDJ.SetLog.mark('stop');
     setStatus('Stopped. Press start to bring the DJ back up.');
   }
@@ -318,26 +338,39 @@
     const p = engine.proposeChange();
     if (!p) { presentSave(true); return; }
     resetAb(); // every fresh pitch auditions at full Deck B
-    const code = engine.render();
-    const layerMap = (engine._lastLayers || []).slice();
-    play(withRoll(code), 'live', engine.song.name); // audition the proposed version
-    presentCard(p, code, layerMap);
+    play(withRoll(engine.renderAB(1)), 'live', engine.song.name); // audition the proposed version, level-matched
+    presentCard(p);
   }
 
-  function presentCard(p, code, layerMap) {
+  function presentCard(p) {
     pitching = true;
     pitchLayer = p.layer;
     const kind = PITCH_KINDS[p.kind] || PITCH_KINDS.reshape;
-    showSuggestion(kind, p.desc ? p.desc.charAt(0).toUpperCase() + p.desc.slice(1) : '—',
+    showSuggestion(kind, (p.desc ? p.desc.charAt(0).toUpperCase() + p.desc.slice(1) : '—') +
+      (p.take > 1 ? ' (take ' + p.take + ')' : ''),
       '✓ Keep the change', '✗ Bin the change', 'Keep this change in your track?');
-    // the code drawer shows the pattern with the pitched lane's lines tinted
-    if (el.code) el.code.innerHTML = pitchCodeHtml(code, p.layer, layerMap);
+    if (el.sgRetake) { el.sgRetake.hidden = false; el.sgRetake.disabled = !engine.canRetake(); }
+    showPitchCode(); // the code panel shows the change as a diff
     renderDeckB(p);
     showFader(true);
-    if (el.djVerb) el.djVerb.textContent = 'pitching';
-    if (el.djMove) el.djMove.textContent = p.desc || 'a change';
     updateUI();
     setDeckSpin();
+    armAuto();
+  }
+
+  // "Another take": same idea, a different version (a new pattern for the
+  // part, another effect, a different fill). Nothing is banned.
+  function liveRetake() {
+    if (!running || pitching !== true || !engine.canRetake()) return false;
+    const p = engine.retakeChange();
+    if (!p) return false;
+    if (SDJ.SetLog) SDJ.SetLog.mark('retake', { desc: p.desc, take: p.take });
+    logEvent('↻ another take: ' + p.desc);
+    resetAb();
+    play(withRoll(engine.renderAB(1)), 'live', engine.song.name);
+    presentCard(p);
+    coachAdvance(1);
+    return true;
   }
 
   // settled=true when the whole vocabulary is exhausted (nothing left to pitch).
@@ -345,16 +378,22 @@
     pitching = 'save';
     pitchLayer = -1;
     showSuggestion(PITCH_KINDS.save,
-      settled ? 'That’s the whole track — cut it as a dubplate?'
-              : 'This is sounding full — cut it as a dubplate?',
+      settled ? 'That’s the whole track. Save it?'
+              : 'This is sounding full. Save it?',
       '◉ Save track', 'Keep building', 'Save it to your crate now?');
+    if (el.sgRetake) el.sgRetake.hidden = true;
     // Deck B shows the finished record, ready for the press
     if (el.deckBDisc) el.deckBDisc.innerHTML = committedDisc();
     showFader(false);
-    if (el.djVerb) el.djVerb.textContent = 'holding';
-    if (el.djMove) el.djMove.textContent = 'ready when you are';
+    showCode(engine.render(), false);
     updateUI();
     setDeckSpin();
+    armAuto();
+  }
+
+  // Button label + its keyboard shortcut hint.
+  function withKey(label, key) {
+    return escapeHtml(label) + ' <kbd>' + key + '</kbd>';
   }
 
   function showSuggestion(kind, desc, approveLabel, skipLabel, ask) {
@@ -366,8 +405,8 @@
     if (el.sgAsk) el.sgAsk.textContent = ask || '';
     // the save-any-time pointer only matters while a change is on the table
     if (el.sgSaveHint) el.sgSaveHint.hidden = kind === PITCH_KINDS.save;
-    if (el.sgApprove) el.sgApprove.textContent = approveLabel;
-    if (el.sgSkip) el.sgSkip.textContent = skipLabel;
+    if (el.sgApprove) el.sgApprove.innerHTML = withKey(approveLabel, 'K');
+    if (el.sgSkip) el.sgSkip.innerHTML = withKey(skipLabel, 'X');
   }
 
   function hideSuggestion() {
@@ -378,34 +417,202 @@
     if (el.sgSaveHint) el.sgSaveHint.hidden = true;
     if (el.sgEmpty) el.sgEmpty.hidden = false;
     setDeckSpin();
+    armAuto();
   }
 
   // Approve (keep) or skip the pitched change / press prompt. Returns whether it
   // acted (false when there was nothing on the card to judge) so headless callers
   // can tell a no-op from a real decision.
-  function liveDecide(keep) {
+  // how = 'auto' when the lean-back timer made the call.
+  function liveDecide(keep, how) {
     if (!running || !pitching) return false;
     if (pitching === 'save') {
       if (keep) {
-        openPress('prompt');      // name it, see what's banked, press it
+        openPress('prompt');      // name it, see what's banked, save it
       } else {
         saveCooldown = (engine.song.vprop || 0) + SAVE_SNOOZE; // snooze the prompt
-        pushFeed('→', 'kept going', 'declined the press', 'flat');
+        pushFeed('→', 'kept going', how === 'auto' ? 'let it run' : 'not saved yet', 'flat');
         livePitch();
       }
       return true;
     }
     if (!engine.song.pending) { livePitch(); return false; }
-    const wasBlended = abMix < 0.999; // the fader sat mid-blend when judged
     const p = keep ? engine.acceptChange() : engine.rejectChange();
-    if (SDJ.SetLog) SDJ.SetLog.mark('vote', { v: keep ? 'up' : 'down', desc: p.desc });
-    pushFeed(keep ? '✓' : '↩', p.desc, keep ? 'approved' : 'skipped', keep ? 'up' : 'down');
-    logEvent((keep ? '✓ kept: ' : '✗ skipped: ') + p.desc);
-    // reverted → reflect the committed track; kept mid-blend → play it clean
-    if (!keep || wasBlended) evaluateCurrent(false);
+    if (SDJ.SetLog) SDJ.SetLog.mark('vote', { v: keep ? 'up' : 'down', desc: p.desc, how: how || 'hand' });
+    pushFeed(keep ? '✓' : '↩', p.desc, keep ? (how === 'auto' ? 'auto-kept' : 'kept') : 'binned',
+      keep ? 'up' : 'down', keep ? p.index : null);
+    logEvent((keep ? '✓ kept: ' : '✗ binned: ') + p.desc);
+    // play the committed track clean (no A/B blend, no level trim) — the next
+    // pitch replaces it straight away, but a save prompt leaves it playing
+    evaluateCurrent(false);
     pitching = false;
+    if (how !== 'auto') coachAdvance(1);
     livePitch();
     return true;
+  }
+
+  // ---- undo + restore points: every keep can be taken back -------------
+
+  function liveUndo() {
+    if (!running || !engine.song) return false;
+    const r = engine.undoKeep();
+    if (!r) { flashChip('nothing to undo yet', ''); return false; }
+    markUndone(r.index);
+    afterRestore('undid “' + r.desc + '”');
+    return true;
+  }
+
+  // Go back to the track as it was right after kept change #i (-1 = before any).
+  function restoreTo(i) {
+    if (!running || !engine.restoreKeep(i)) return false;
+    markUndone(i + 1);
+    afterRestore('went back in the set history');
+    return true;
+  }
+
+  function afterRestore(msg) {
+    pitching = false;
+    // a restore point predates any direction typed since — re-apply it so a
+    // banned part doesn't sneak back in
+    if (curDirectives) renderCurateChips(curDirectives, applyCurationToSong(curDirectives));
+    flashChip(msg, '');
+    logEvent('↶ ' + msg);
+    evaluateCurrent(false);
+    updateUI();
+    livePitch();
+  }
+
+  // Strike through the history rows whose keeps came off (index >= from).
+  function markUndone(from) {
+    if (!el.djFeed) return;
+    el.djFeed.querySelectorAll('li[data-keep]').forEach((li) => {
+      if (+li.dataset.keep < from) return;
+      li.classList.add('undone');
+      li.removeAttribute('data-keep');
+      const b = li.querySelector('.frestore');
+      if (b) b.remove();
+      const why = li.querySelector('.fwhy');
+      if (why) why.textContent = 'undone';
+    });
+  }
+
+  // ---- lean-back: "Let it run" keeps each change after a few bars ---------
+  // Spotify DJ / MusicFX DJ style: the set carries on without you. Any click
+  // restarts the count; at a save prompt it carries on building (it never
+  // saves on its own — the crate is yours).
+
+  const AUTO_BARS = 8;
+  let autoRun = false, autoTimer = 0, autoTick = 0, autoDue = 0;
+
+  function setAuto(on) {
+    autoRun = !!on;
+    if (el.autoBtn) { el.autoBtn.classList.toggle('on', autoRun); el.autoBtn.setAttribute('aria-pressed', String(autoRun)); }
+    armAuto();
+    return autoRun;
+  }
+
+  function armAuto() {
+    clearTimeout(autoTimer); clearInterval(autoTick);
+    autoTimer = 0; autoTick = 0;
+    if (el.autoNote) el.autoNote.hidden = true;
+    if (!autoRun || !running || !pitching || !engine.song) return;
+    const ms = Math.round((AUTO_BARS / (engine.song.cps || 0.5)) * 1000);
+    autoDue = Date.now() + ms;
+    autoTimer = setTimeout(autoFire, ms);
+    autoTick = setInterval(showAutoNote, 500);
+    showAutoNote();
+  }
+
+  function showAutoNote() {
+    if (!el.autoNote) return;
+    const left = Math.max(0, Math.ceil((autoDue - Date.now()) / 1000));
+    el.autoNote.hidden = false;
+    el.autoNote.textContent = (pitching === 'save' ? 'Letting it run: carrying on in ' : 'Letting it run: keeping this in ') + left + ' s';
+  }
+
+  function autoFire() {
+    autoTimer = 0;
+    clearInterval(autoTick); autoTick = 0;
+    if (!autoRun || !running || !pitching) return;
+    if (el.pressModal && !el.pressModal.hidden) { armAuto(); return; } // you're mid-save — wait another round
+    liveDecide(pitching !== 'save', 'auto'); // keep a change; at a save prompt, keep building
+  }
+
+  // ---- keyboard: the whole loop without the mouse -----------------------
+  // Space switches Without/With · K keep · X bin · R another take · S save ·
+  // Z (or Ctrl/Cmd+Z) undo · L let it run. Ignored while typing.
+
+  function onLiveKey(e) {
+    if (currentRoute() !== 'live' || !running) return;
+    if (el.pressModal && !el.pressModal.hidden) return;
+    const t = e.target, tag = t && t.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
+    if (e.altKey || e.repeat) return; // holding K must not keep a run of unheard changes
+    const k = (e.key || '').toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); liveUndo(); return; }
+    if (e.ctrlKey || e.metaKey) return;
+    if (k === ' ' || k === 'spacebar') {
+      // Space is always the A/B switch: a focused Keep/Bin/part button must
+      // not take it as a click, so drop its focus first (keyup then has no target)
+      if (tag === 'BUTTON' && t !== el.abTrack && t !== el.abChange) t.blur();
+      else if (tag === 'BUTTON') return; // a focused A/B button switches by itself
+      if (pitching === true) { setAbMix(abMix >= 0.5 ? 0 : 1); coachAdvance(0); }
+    } else if (k === 'k') liveDecide(true);
+    else if (k === 'x') liveDecide(false);
+    else if (k === 'r') liveRetake();
+    else if (k === 's') onSaveCurrent();
+    else if (k === 'z') liveUndo();
+    else if (k === 'l') setAuto(!autoRun);
+    else return;
+    e.preventDefault();
+  }
+
+  // ---- first-run tips: three pointers through the first turn -------------
+
+  const COACH_KEY = 'sdj.coachDone';
+  const COACH = [
+    { target: 'abWrap', text: 'Listen both ways. Click Without and With (or press Space) to hear your track without and with the DJ’s suggestion.' },
+    { target: 'sgActions', text: 'Then decide. Keep puts the change in your track, Bin throws it out, and Another take tries a different version of the same idea.' },
+    { target: 'saveBtn', text: 'Save track puts it in your crate whenever you like. It doesn’t have to be finished, and Undo takes back any keep.' },
+  ];
+  let coachStep = -1;
+
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } }
+
+  function coachStart() {
+    if (lsGet(COACH_KEY)) return;
+    coachStep = 0;
+    coachRender();
+  }
+  // fromStep: only advance when the user just did that step's thing
+  function coachAdvance(fromStep) {
+    if (coachStep < 0 || (fromStep != null && fromStep !== coachStep)) return;
+    coachStep += 1;
+    if (coachStep >= COACH.length) { coachDone(); return; }
+    coachRender();
+  }
+  function coachDone() {
+    coachStep = -1;
+    lsSet(COACH_KEY, '1');
+    coachRender();
+  }
+  function coachRender() {
+    if (!el.coach) return;
+    document.querySelectorAll('.coach-target').forEach((n) => n.classList.remove('coach-target'));
+    if (coachStep < 0 || !running || currentRoute() !== 'live') { el.coach.hidden = true; return; }
+    const step = COACH[coachStep];
+    const tgt = $(step.target);
+    el.coachText.textContent = step.text;
+    el.coachNext.textContent = coachStep === COACH.length - 1 ? 'Got it' : 'Next';
+    el.coach.hidden = false;
+    if (tgt) {
+      tgt.classList.add('coach-target');
+      const r = tgt.getBoundingClientRect();
+      const w = el.coach.offsetWidth || 300;
+      el.coach.style.top = Math.round(r.bottom + window.scrollY + 10) + 'px';
+      el.coach.style.left = Math.round(clamp(r.left + window.scrollX, 8, Math.max(8, window.innerWidth - w - 8))) + 'px';
+    }
   }
 
   // ---- the A/B pick: hear the pitch against the committed track ----
@@ -431,6 +638,7 @@
   function setAbMix(v) {
     abMix = clamp(v, 0, 1);
     reflectAb();
+    if (pitching === true) { showPitchCode(); armAuto(); }
     return evaluateAb();
   }
 
@@ -504,23 +712,33 @@
     if (el.deckBPlatter) el.deckBPlatter.classList.toggle('spin', liveAudio && !!pitching);
   }
 
-  // Current code with the pitched layer's line(s) highlighted in its lane colour.
-  function pitchCodeHtml(code, layer, layerMap) {
-    const lines = code.split('\n');
-    const map = layerMap || engine._lastLayers || [];
-    const bodyStart = 2; // line 0 = setcps(...), line 1 = stack(
-    const colors = SDJ.LANE_COLORS;
-    const layerColor = (colors && layer != null && layer >= 0) ? colors[layer] : null;
+  // The code panel follows the A/B pick. Without: the committed track exactly
+  // as it plays. With: the pitch as a diff — the lines it takes out (−) and the
+  // lines it brings in (+), edged in the lane's colour.
+  function showPitchCode() {
+    if (!el.code || !engine.song) return;
+    if (abMix < 0.5 || !engine.song.pending) { el.code.innerHTML = highlight(engine.renderCommitted()); return; }
+    const d = engine.abDiff();
+    if (d) el.code.innerHTML = diffCodeHtml(d);
+  }
+
+  function diffCodeHtml(d) {
+    const colors = SDJ.LANE_COLORS || [];
+    const line = (cls, mark, html, style) =>
+      '<span class="sg-line' + cls + '"' + (style || '') + '><span class="sg-mark" aria-hidden="true">' + mark + '</span>' + html + '</span>';
     let out = '';
-    for (let idx = 0; idx < lines.length; idx++) {
-      const k = idx - bodyStart;
-      const isLayer = k >= 0 && k < map.length && map[k] === layer;
-      const inner = highlight(lines[idx]) || ' ';
-      const style = (isLayer && layerColor)
-        ? ' style="border-left-color:' + layerColor + ';background:' + layerColor + '22"'
-        : '';
-      out += '<span class="sg-line' + (isLayer ? ' sg-hl' : '') + '"' + style + '>' + inner + '</span>';
-    }
+    d.head.split('\n').forEach((l) => { if (l) out += line('', ' ', highlight(l)); });
+    out += line('', ' ', highlight('stack('));
+    d.lines.forEach((ln, i) => {
+      const cls = ln.mark === '+' ? ' sg-add' : ln.mark === '-' ? ' sg-del' : '';
+      const c = ln.layer === SDJ.FILL_IDX ? SDJ.FILL_COLOR : colors[ln.layer];
+      const style = cls && c ? ' style="--lane:' + c + '"' : '';
+      const mark = ln.mark === '-' ? '−' : ln.mark;
+      out += line(cls, mark, '  ' + highlight(ln.text) + (i < d.lines.length - 1 ? ',' : ''), style);
+    });
+    const lvl = Math.abs(d.level - 1) > 0.005;
+    out += line('', ' ', highlight(')' + (lvl ? '.postgain(' + d.level.toFixed(2) + ')' : '')) +
+      (lvl ? ' <span class="sg-note">// level-matched to Deck A</span>' : ''));
     return out;
   }
 
@@ -705,14 +923,17 @@
 
   function onSaveCurrent() {
     if (!running || !engine.song) {
-      setStatus('Start a set first, then press a version you like.');
+      setStatus('Start a set first, then save a version you like.');
       return;
     }
     openPress('button');
+    coachAdvance(2);
   }
 
+  let pressHideTimer = 0; // the drop-away animation's hide — a reopen must cancel it
   function openPress(origin) {
     if (!engine.song) return false;
+    clearTimeout(pressHideTimer); pressHideTimer = 0;
     savedFocus = (document && document.activeElement) || null; // restore focus on close
     pressOrigin = origin || 'button';
     const st = engine.state();
@@ -724,8 +945,8 @@
     }
     if (el.pressVersion) {
       el.pressVersion.textContent = (engine.song.pending && pitching && pitching !== 'save')
-        ? 'Pressing the approved version — the un-judged pitch on Deck B is left off.'
-        : 'Pressing the track exactly as it sounds now.';
+        ? 'Saving the approved version. The suggestion on Deck B is left off until you keep it.'
+        : 'Saving the track exactly as it sounds now.';
     }
     setPressFormat('arranged'); // the shippable default; Loop is one tap away
     renderPressDisc();
@@ -779,26 +1000,28 @@
     const code = (pressFormat === 'arranged' && engine.renderArrangedCommitted)
       ? engine.renderArrangedCommitted()
       : loopCode;
-    const banked = saveToCrate('◉ cut “' + name + '” as a dubplate' +
+    const banked = saveToCrate('◉ saved “' + name + '”' +
       (pressFormat === 'arranged' ? ' (arranged)' : ' (loop)'), 'saved', code,
       pressFormat === 'arranged' ? loopCode : null);
     // saveToCrate returns false when storage was full (or it deduped) — don't
     // claim a save that didn't happen, and leave the modal open so the user can
     // export/prune and retry.
     if (!banked) { renderPressDisc(); return false; }
-    setStatus('Cut “' + name + '” — it’s in your crate.');
+    setStatus('Saved “' + name + '” to your crate.');
+    coachAdvance(2);
     const fromPrompt = pressOrigin === 'prompt';
     pressOrigin = null;
     closePressA11y();
     if (el.pressModal) {
       el.pressModal.classList.add('pressed'); // the disc drops away into the crate
-      setTimeout(() => { if (el.pressModal) el.pressModal.hidden = true; }, PRESS_DROP_MS);
+      pressHideTimer = setTimeout(() => { pressHideTimer = 0; if (el.pressModal) el.pressModal.hidden = true; }, PRESS_DROP_MS);
     }
     if (fromPrompt) {
       logEvent('🎧 next up: fresh track');
       freshTrack('next'); // the track's done — roll a fresh one
     } else {
       updateUI();         // keep working; the header wears the new name
+      armAuto();
     }
     return true;
   }
@@ -824,8 +1047,10 @@
     if (el.pressModal) el.pressModal.hidden = true;
     if (fromPrompt) {
       saveCooldown = (engine.song.vprop || 0) + SAVE_SNOOZE; // snooze the prompt
-      pushFeed('→', 'kept going', 'declined the press', 'flat');
+      pushFeed('→', 'kept going', 'not saved yet', 'flat');
       livePitch();
+    } else {
+      armAuto();
     }
     return true;
   }
@@ -908,28 +1133,7 @@
       if (logMsg) logEvent('↩ already the newest in the crate — not duplicated');
       return false;
     }
-    const artLayer = pickArtLayer(g);
-    const entry = {
-      id: mkId('rec-' + (s.seed >>> 0).toString(36)),
-      name: s.name,
-      key: s.key,
-      scaleType: s.scaleType,
-      bpm: s.bpm,
-      cps: s.cps,
-      genre: st.genre,
-      genreLabel: st.genreLabel,
-      code: code,
-      loopCode: loopCodeOverride || null,
-      genome: JSON.parse(JSON.stringify(g)), // snapshot: re-loadable / remixable
-      art: { seed: s.seed >>> 0, layer: artLayer, variant: g.variant[artLayer] || 0 },
-      // approve-rate, not the old crowd-EMA (which never moves in turn-based
-      // mode and stamped every record "50% hype"). Null when nothing was judged.
-      approval: (s.voteLog && s.voteLog.length)
-        ? Math.round((s.voteLog.filter((v) => v.v === 'up').length / s.voteLog.length) * 100)
-        : null,
-      source: source || 'saved',
-      savedAt: Date.now(),
-    };
+    const entry = makeEntry(s, g, st, code, loopCodeOverride, source);
     crate.unshift(entry);
     if (crate.length > CRATE_CAP) crate.length = CRATE_CAP;
     // if storage rejected the write, undo the in-memory unshift so the cache and
@@ -939,6 +1143,138 @@
     renderCrate();
     renderRemixShelf();
     return true;
+  }
+
+  // A crate record from a song + the genome to bank (the committed one).
+  function makeEntry(s, g, st, code, loopCode, source) {
+    const artLayer = pickArtLayer(g);
+    return {
+      id: mkId('rec-' + (s.seed >>> 0).toString(36)),
+      name: s.name,
+      key: s.key,
+      scaleType: s.scaleType,
+      bpm: s.bpm,
+      cps: s.cps,
+      genre: st.genre,
+      genreLabel: st.genreLabel,
+      code: code,
+      loopCode: loopCode || null,
+      genome: JSON.parse(JSON.stringify(g)), // snapshot: re-loadable / remixable
+      params: SDJ.DJEngine.songParams(s, g),  // the song as plain data — what a share link carries
+      art: { seed: s.seed >>> 0, layer: artLayer, variant: g.variant[artLayer] || 0 },
+      // approve-rate, not the old crowd-EMA (which never moves in turn-based
+      // mode and stamped every record "50% hype"). Null when nothing was judged.
+      approval: (s.voteLog && s.voteLog.length)
+        ? Math.round((s.voteLog.filter((v) => v.v === 'up').length / s.voteLog.length) * 100)
+        : null,
+      source: source || 'saved',
+      savedAt: Date.now(),
+    };
+  }
+
+  // ---- demo records: a first visit lands on a crate (and Remix) with music
+  // in it. Built by the real engine from fixed seeds, once per browser —
+  // deleting them keeps them gone.
+  const DEMO_KEY = 'sdj.demosSeeded';
+  const DEMOS = [
+    { seed: 0x5eed0001, genre: 'house', name: 'Glasshouse' },
+    { seed: 0x5eed0002, genre: 'loFi', name: 'Rain on Tin' },
+    { seed: 0x5eed0003, genre: 'synthwave', name: 'Night Drive' },
+  ];
+  function seedDemos() {
+    if (lsGet(DEMO_KEY) || loadCrate().length) return;
+    lsSet(DEMO_KEY, '1');
+    saveCrate(buildDemos());
+  }
+  function buildDemos() {
+    const crate = [];
+    DEMOS.forEach((d, k) => {
+      const e = new SDJ.DJEngine();
+      e.masterSeed = d.seed;
+      e.genrePref = d.genre;
+      e.newSong();
+      e.voteReset();
+      for (let t = 0; t < 40 && e.state().activeCount < 5; t++) {
+        if (!e.proposeChange()) break;
+        e.acceptChange();
+      }
+      e.song.name = d.name;
+      const entry = makeEntry(e.song, e.song.genome, e.state(), e.renderArranged(), e.render(), 'demo');
+      entry.approval = null;
+      entry.savedAt = Date.now() - (k + 1) * 1000; // keep the listed order
+      crate.push(entry);
+    });
+    return crate;
+  }
+
+  // ---- sharing: a link that carries the record, and "Open in Strudel" ----
+  // No backend: the record rides in the URL hash (#play=…), and strudel.cc
+  // takes the code the same way (base64 in its hash).
+  function b64encode(str) { return btoa(unescape(encodeURIComponent(str))); }
+  function b64decode(b) { return decodeURIComponent(escape(atob(b))); }
+
+  function strudelUrl(code) {
+    return 'https://strudel.cc/#' + encodeURIComponent(b64encode(code));
+  }
+  function openInStrudel(code) {
+    const url = strudelUrl(code);
+    if (typeof window.open === 'function') window.open(url, '_blank', 'noopener');
+    return url;
+  }
+
+  // A share link carries the song's parameters, NEVER its code: Strudel runs
+  // code as JavaScript, so code from a URL would be a drive-by script. The
+  // receiving app re-renders the parameters (engine.loadSong validates them).
+  // Null for a record that can't be described that way (remixes, old saves).
+  function shareUrl(entry) {
+    if (!entry || !entry.params) return null;
+    const payload = { v: 2, p: entry.params, arranged: /arrange\(/.test(entry.code || '') };
+    return location.href.split('#')[0] + '#play=' + encodeURIComponent(b64encode(JSON.stringify(payload)));
+  }
+
+  // Take a shared record from a #play=… hash into the crate. Returns the entry
+  // (an existing one when the same code is already there), or null if unreadable.
+  let sharedFlashId = null;
+  function importShared(encoded) {
+    let e = null;
+    try {
+      const msg = JSON.parse(b64decode(decodeURIComponent(encoded)));
+      const eng = new SDJ.DJEngine();
+      const song = msg && eng.loadSong(msg.p);
+      if (song) {
+        const loop = eng.render();
+        e = makeEntry(song, song.genome, eng.state(), msg.arranged ? eng.renderArranged() : loop,
+          msg.arranged ? loop : null, 'shared');
+        e.approval = null;
+      }
+    } catch (err) { e = null; }
+    if (!e) return null;
+    const crate = loadCrate();
+    const had = crate.find((x) => x.code === e.code);
+    if (had) { sharedFlashId = had.id; return had; }
+    e.id = mkId('shared');
+    e.source = 'shared';
+    e.savedAt = Date.now();
+    crate.unshift(e);
+    if (crate.length > CRATE_CAP) crate.length = CRATE_CAP;
+    if (!saveCrate(crate)) { crate.shift(); return null; }
+    sharedFlashId = e.id;
+    renderRemixShelf();
+    return e;
+  }
+
+  function copyText(text, btn) {
+    const done = () => {
+      if (!btn) return;
+      const was = btn.textContent;
+      btn.textContent = '✓';
+      setTimeout(() => { btn.textContent = was; }, 1400);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, () => window.prompt('Copy this link', text));
+    } else {
+      window.prompt('Copy this link', text);
+    }
   }
 
   function loadCrate() {
@@ -989,18 +1325,19 @@
     if (!el.crate) return;
     const rows = sortedCrate();
     el.crate.innerHTML = '';
+    syncRemixNav();
     if (!rows.length) {
       el.crate.innerHTML =
-        '<li class="crate-empty">No records yet. Go live and press a track — every save cuts a ' +
-        'real record with its own colours and label, and it lands here in your vault.</li>';
+        '<li class="crate-empty">No saved tracks yet. Go live and hit ◉ Save track. Every save ' +
+        'becomes a record with its own colours and label, and lands here.</li>';
       return;
     }
-    const SRC = { banger: '★ banger', 'a&r': 'a&r', saved: 'saved' };
+    const SRC = { banger: '★ banger', 'a&r': 'a&r', saved: 'saved', demo: 'demo', shared: 'shared with you' };
     rows.forEach(({ entry, i }) => {
       const playing = i === previewing;
       const id = escapeHtml(entry.id || ''); // stable identity — clicks resolve by this, never a positional index
       const li = document.createElement('li');
-      li.className = 'crate-item' + (playing ? ' playing' : '');
+      li.className = 'crate-item' + (playing ? ' playing' : '') + (entry.id && entry.id === sharedFlashId ? ' fresh' : '');
       li.dataset.id = entry.id || '';
       // savedAt / bpm arrive from untrusted imports too — derive `when` only from a
       // real Date, coerce bpm to a Number, and escape every interpolated string.
@@ -1024,6 +1361,8 @@
           '<button data-act="' + (playing ? 'stop' : 'play') + '" data-id="' + id + '" title="' + (playing ? 'Stop' : 'Spin it') + '" aria-label="' + (playing ? 'Stop' : 'Spin') + ' “' + nm + '”">' + (playing ? '⏹' : '▶') + '</button>' +
           '<button data-act="remix" data-id="' + id + '" title="DJ this record in the Remix lab" aria-label="Remix “' + nm + '”">🎚</button>' +
           '<button data-act="mp3" data-id="' + id + '" title="Export as MP3" aria-label="Export “' + nm + '” as MP3">⬇</button>' +
+          (entry.params ? '<button data-act="share" data-id="' + id + '" title="Copy a link anyone can open to hear it" aria-label="Copy a share link for “' + nm + '”">🔗</button>' : '') +
+          '<button data-act="strudel" data-id="' + id + '" title="Open the code in Strudel" aria-label="Open “' + nm + '” in Strudel">↗</button>' +
           '<button data-act="rename" data-id="' + id + '" title="Rename" aria-label="Rename “' + nm + '”">✎</button>' +
           '<button data-act="del" data-id="' + id + '" title="Delete" aria-label="Delete “' + nm + '”">✕</button>' +
         '</div>';
@@ -1043,8 +1382,21 @@
     else if (act === 'stop') stopPreview();
     else if (act === 'remix') sendToRemix(id);
     else if (act === 'mp3') exportTrackMp3(id, btn);
+    else if (act === 'share' || act === 'strudel') {
+      const entry = loadCrate()[crateIndexById(id)];
+      if (!entry) return;
+      if (act === 'share') copyText(shareUrl(entry), btn);
+      else openInStrudel(entry.loopCode || entry.code);
+    }
     else if (act === 'rename') renameTrack(id);
     else if (act === 'del') deleteTrack(id);
+  }
+
+  // Remix is a DJ console for mixing two records — it only shows in the
+  // navigation once the crate has two to mix (a deep link still works).
+  function syncRemixNav() {
+    const show = loadCrate().length >= 2;
+    document.querySelectorAll('[data-remix-link]').forEach((a) => { a.hidden = !show; });
   }
 
   // Resolve a crate entry's live storage index from its stable id.
@@ -1820,7 +2172,7 @@
     if (!crate.length) {
       const empty = document.createElement('div');
       empty.className = 'remix-shelf-empty';
-      empty.textContent = 'No dubplates yet — cut some in the Live set first.';
+      empty.textContent = 'No saved tracks yet. Save some in the Live set first.';
       el.remixShelf.appendChild(empty);
       return;
     }
@@ -1872,7 +2224,7 @@
     const lane = (genome && genome.active) ? pickArtLayer(genome) : 0;
     const cps = masterCps();
     const crate = loadCrate();
-    if (crate.length && crate[0].code === code) { setStatus('Already cut — the newest dubplate is this exact blend.'); return; }
+    if (crate.length && crate[0].code === code) { setStatus('Already saved: the newest record is this exact blend.'); return; }
     const entry = {
       id: mkId('rmx'),
       name: name, key: rec.key, scaleType: rec.scaleType,
@@ -1888,8 +2240,8 @@
     if (!saveCrate(crate)) { crate.shift(); return; } // storage rejected it — don't claim a save
     renderCrate();
     renderRemixShelf();
-    logEvent('◉ cut the remix “' + name + '” as a dubplate');
-    setStatus('Cut “' + name + '” into the crate.');
+    logEvent('◉ saved the remix “' + name + '”');
+    setStatus('Saved “' + name + '” to your crate.');
   }
 
   function updateRemixButtons() {
@@ -2005,7 +2357,6 @@
   // ---- tuning controls: part mixer + density dial + genre pills ----------
 
   function buildControls() {
-    buildPartMix(el.livePartMix, (i, v) => { laneMoodIn[i] = v; applyControls(); });
     if (el.liveDensity) {
       el.liveDensity.addEventListener('input', () => { intentIn = (+el.liveDensity.value) / 100; applyControls(); });
     }
@@ -2075,54 +2426,39 @@
     return true;
   }
 
-  // Build the part mixer: one row per arrangement lane, each a 3-state segmented
-  // control — drop (−1) / auto (0, the DJ decides) / feature (+1). Replaces the
-  // seven fiddly faders with an explicit, legible choice. onChange(i, v) fires
-  // with the lane index and value in {-1, 0, 1}. Each row exposes set(v) so the
-  // headless SDJ.setOpinion() and resetControls() can drive the visual too.
-  function buildPartMix(container, onChange) {
-    if (!container) return;
+  // The part chips at the top of the rig are the per-part steer: a click
+  // cycles DJ decides → feature → drop (the kick is the floor: it only
+  // toggles feature). Same opinions the old seven-row mixer set.
+  const OPINION_WORDS = { '-1': 'drop it', '0': 'DJ decides', '1': 'featured' };
+  function opinionOf(i) {
+    const v = laneMoodIn[i] || 0;
+    return v > 0.33 ? 1 : v < -0.33 ? -1 : 0;
+  }
+  function cycleOpinion(i) {
+    const cur = opinionOf(i);
+    const next = cur === 0 ? 1 : cur === 1 ? (i === 0 ? 0 : -1) : 0;
+    SDJ.setOpinion(i, next);
+    const st = (SDJ.STAGES || [])[i];
+    flashChip((st ? st.label : 'part') + ': ' + OPINION_WORDS[next], next < 0 ? 'ban' : next > 0 ? 'feature' : '');
+  }
+  function reflectOpinions() {
+    if (!el.stageChips) return;
     const stages = SDJ.STAGES || [];
-    const colors = SDJ.LANE_COLORS || [];
-    container.innerHTML = '';
-    container._rows = [];
-    stages.forEach((st, i) => {
-      const row = document.createElement('div');
-      row.className = 'pm-row';
-      const key = document.createElement('span');
-      key.className = 'pm-key'; key.textContent = st.key;
-      key.style.color = colors[i] || '#fff';
-      const seg = document.createElement('div');
-      seg.className = 'pm-seg';
-      const defs = [
-        { v: -1, label: 'drop', title: 'drop ' + st.label },
-        { v: 0, label: 'auto', title: 'let the DJ decide' },
-        { v: 1, label: 'feature', title: 'feature ' + st.label },
-      ];
-      const set = (v) => btns.forEach((b, k) => b.classList.toggle('on', defs[k].v === v));
-      const btns = defs.map((d) => {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'pm-btn';
-        b.textContent = d.label;
-        b.title = d.title;
-        b.style.setProperty('--pm', colors[i] || '#fff');
-        b.addEventListener('click', () => { set(d.v); onChange(i, d.v); });
-        seg.appendChild(b);
-        return b;
-      });
-      set(0); // default: auto (the DJ decides)
-      row.appendChild(key); row.appendChild(seg);
-      container.appendChild(row);
-      container._rows.push({ set: set });
+    Array.from(el.stageChips.children).forEach((c, i) => {
+      const o = opinionOf(i);
+      c.classList.toggle('feat', o > 0);
+      c.classList.toggle('drop', o < 0);
+      const label = stages[i] ? stages[i].label : 'part';
+      c.title = label + ': ' + OPINION_WORDS[o] + '. Click to change (DJ decides → feature → drop).';
+      c.setAttribute('aria-label', label + ', ' + OPINION_WORDS[o]);
     });
   }
 
-  // Zero the live faders + dial and the input state (a fresh set).
+  // Zero the part opinions + dial and the input state (a fresh set).
   function resetControls() {
     for (let i = 0; i < laneMoodIn.length; i++) laneMoodIn[i] = 0;
     intentIn = 0;
-    if (el.livePartMix && el.livePartMix._rows) el.livePartMix._rows.forEach((r) => r.set(0));
+    reflectOpinions();
     if (el.liveDensity) el.liveDensity.value = '0';
   }
 
@@ -2376,12 +2712,15 @@
       st.key + ' ' + st.scaleType + ' · ' + st.bpm + ' BPM · ' + st.activeCount + '/' + LANE_COUNT + ' parts';
     if (el.stageChips.childElementCount !== st.stageKeys.length) {
       el.stageChips.innerHTML = '';
-      st.stageKeys.forEach((k) => {
-        const c = document.createElement('span');
+      st.stageKeys.forEach((k, i) => {
+        const c = document.createElement('button');
+        c.type = 'button';
         c.className = 'chip';
         c.textContent = k;
+        c.addEventListener('click', () => cycleOpinion(i));
         el.stageChips.appendChild(c);
       });
+      reflectOpinions();
     }
     // Chips show the COMMITTED arrangement — when a suggestion is applied but not
     // yet judged, that comes from the pre-pitch snapshot; the pitched lane pulses.
@@ -2393,25 +2732,26 @@
       if (isPitch && SDJ.LANE_COLORS) c.style.setProperty('--pitch', SDJ.LANE_COLORS[i]);
     });
     renderDeckA(); // Deck A wears the committed record — rings accrete as parts land
+    if (el.undoBtn) el.undoBtn.disabled = !running || !(engine.song.kept && engine.song.kept.length);
   }
 
   // ---- the DJ's status + a running approve/skip history ------------------
 
   function resetMind() {
     if (el.djFeed) el.djFeed.innerHTML = '';
-    if (el.djVerb) el.djVerb.textContent = 'warming up';
-    if (el.djMove) el.djMove.textContent = 'press start to begin…';
-    if (el.djNow) el.djNow.classList.remove('settled');
   }
 
-  function pushFeed(glyph, msg, why, tone) {
+  // keep = the kept change's restore-point index (adds a ↶ "go back here").
+  function pushFeed(glyph, msg, why, tone, keep) {
     if (!el.djFeed) return;
     const li = document.createElement('li');
     li.className = 'feed-row fresh ' + (tone || '');
+    if (keep != null) li.dataset.keep = String(keep);
     li.innerHTML =
       '<span class="fglyph">' + glyph + '</span>' +
       '<span class="fmsg">' + escapeHtml(msg) + '</span>' +
-      '<span class="fwhy">' + escapeHtml(why || '') + '</span>';
+      '<span class="fwhy">' + escapeHtml(why || '') + '</span>' +
+      (keep != null ? '<button class="frestore" type="button" title="Go back to the track as it was here" aria-label="Go back to here">↶</button>' : '');
     el.djFeed.prepend(li);
     while (el.djFeed.childElementCount > FEED_MAX) el.djFeed.lastChild.remove();
   }
@@ -2571,7 +2911,15 @@
   SDJ.closeVisuals = closeVisuals;
 
   function onRoute() {
+    const m = /^#play=(.+)$/.exec(location.hash || '');
+    if (m) {
+      const e = importShared(m[1]);
+      setStatus(e ? '“' + e.name + '” is in your crate. Press ▶ to hear it.' : 'That share link couldn’t be read.');
+      location.replace('#crate'); // fires hashchange → the crate, without a back-button loop
+      return;
+    }
     showView(currentRoute());
+    coachRender();
   }
 
   // ---- menu ambience: a random crate record spins quietly under the menu ----
@@ -2655,8 +3003,19 @@
     stop: stopSet,
     approve: function () { return liveDecide(true); },
     skip: function () { return liveDecide(false); },
+    retake: liveRetake,       // another take of the same idea
+    undo: liveUndo,           // take back the last keep
+    restore: restoreTo,       // (i) back to just after keep #i; -1 = before any
+    auto: function (on) { return on === undefined ? autoRun : setAuto(on); }, // "Let it run"
     pitching: function () { return pitching; },
   };
+  // sharing (agent-native): a link carrying a record, and the strudel.cc URL
+  SDJ.share = {
+    link: shareUrl,           // (entry) → URL with #play=…
+    open: importShared,       // (encoded) → the crate entry it landed as
+    strudel: strudelUrl,      // (code) → strudel.cc URL
+  };
+  SDJ.demoRecords = buildDemos; // the first-visit demo records (fresh copies)
   // the A/B crossfader (agent-native): blend the pitch against the committed
   // track. set() returns whether the mix was audible (there was a pitch to blend).
   SDJ.ab = {
@@ -2680,11 +3039,7 @@
   SDJ.setOpinion = function (i, v) {
     if (i < 0 || i >= laneMoodIn.length) return;
     laneMoodIn[i] = clamp(v, -1, 1);
-    // snap the mixer display to the nearest of drop / auto / feature
-    if (el.livePartMix && el.livePartMix._rows && el.livePartMix._rows[i]) {
-      const snap = laneMoodIn[i] > 0.33 ? 1 : laneMoodIn[i] < -0.33 ? -1 : 0;
-      el.livePartMix._rows[i].set(snap);
-    }
+    reflectOpinions(); // the part chips show drop / DJ decides / feature
     applyControls();
   };
   SDJ.setGenre = setGenre; // pin the genre for new tracks (agent-native)

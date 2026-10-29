@@ -10,10 +10,11 @@ approved parts press coloured rings onto the disc, saving "presses" it into the 
 No backend, no framework, no bundler. Strudel is loaded from a CDN and exposes
 `initStrudel`, `evaluate`, `hush` (plus all pattern functions) as globals.
 
-**Naming/vocabulary (renamed 2026-07, rebranded 2026-10):** the project is **Vibe DJ**
-(formerly Acetate). UI copy calls the
-save verb **cut** and a saved record a **dubplate** (a one-off acetate cut); the render
-engine (`dj.js`) is conceptually the **lathe**. Code and the `SDJ.*` API keep their
+**Naming/vocabulary (renamed 2026-07, rebranded 2026-10, plain-worded 2026-10-29):** the
+project is **Vibe DJ** (formerly Acetate). UI copy now says **save** / **saved track**
+everywhere (◉ Save track, "Save to crate"); the record/vinyl visuals stay, but "cut",
+"press" and "dubplate" are gone from the copy. The render engine (`dj.js`) is
+conceptually the **lathe**. Code and the `SDJ.*` API keep their
 existing identifiers — `press`/`pressModal`/`openPress`/`renderCommitted`/`render` and the
 `sdj.crate` storage key are unchanged (implementation names, not UI copy). Don't rename
 them to chase the vocabulary.
@@ -48,6 +49,15 @@ Windows).
     rework is only spaced out (so pitching never dead-ends).
   - `render()` — compile the genome → an idiomatic Strudel `stack(...)` string. Also
     stashes `_lastLines`/`_lastLayers` (body lines + their lane indices).
+  - `abLevel()` / `abDiff()` — the With side's loudness match (an add is louder, and
+    louder sounds better, so B wears a whole-stack `.postgain()`; Without is never
+    trimmed) and the pitch as a code diff (`-` committed lines, `+` proposed) for the
+    code panel.
+  - `canRetake()` / `retakeChange()` — "Another take": the same idea re-cut (new
+    variant for an add/rework, another FX bit, another fill); never bans. Steps the
+    variant until the render actually differs (some variants alias).
+  - `undoKeep()` / `restoreKeep(i)` / `discardPending()` — every `acceptChange()`
+    pushes a `{ desc, before, after }` restore point onto `s.kept`.
   - `renderAB(mix)` — ONE balanced program carrying both versions of every lane that differs (an add re-shapes other lanes via the energy floor) at
     complementary gains (chained `.gain()` multiplies) — what the crossfader evaluates.
   - `renderCommitted()` — the approved track only, rendered from the pre-pitch snapshot —
@@ -85,13 +95,27 @@ Windows).
   carries into the crate for genome-bearing entries; `LAYER_HUE` faces only legacy
   entries. Same seed → same disc everywhere.
 - `src/app.js` — Strudel init, the deck rig (Deck A committed record / Deck B acetate /
-  A/B crossfader), the pressing modal, the live code panel (single-pass highlighter,
-  bottom-right of the Live stage) with the **direction box** above it, the
-  compact set history, the `localStorage` crate and the remix console. The Live verdict
-  buttons read **"✓ Keep the change" / "✗ Bin the change"**, the A/B pick is two big **Without / With** buttons (`#abTrack`/`#abChange`), and **◉ Save track** (`#saveBtn`) is always available while live; the old on-screen "DJ moves" event log is gone
+  A/B pick), the save modal, the **Steer the DJ** column (direction box, folded genre +
+  density, and the live code panel filling the rest — a +/− diff while a change is up
+  on With), the compact set history (kept rows carry a ↶ restore point), the
+  `localStorage` crate and the remix console. The Live verdict buttons read
+  **"✓ Keep the change" / "✗ Bin the change"** plus **↻ Another take**, the A/B pick is
+  two big **Without / With** buttons (`#abTrack`/`#abChange`), and **◉ Save track**
+  (`#saveBtn`), **↶ Undo** and **⟳ Let it run** (auto-keep after 8 bars; never auto-saves)
+  sit in the rig head. Keyboard: Space switch · K keep · X bin · R take · S save ·
+  Z/Ctrl+Z undo · L let it run (`onLiveKey`, ignored while typing). Per-part steer is
+  the part chips (`#stageChips` buttons: DJ decides → feature → drop) — the old 7×3
+  part mixer is gone. First visit: three demo records (`buildDemos`, fixed seeds,
+  `sdj.demosSeeded`) and three tips (`sdj.coachDone`). Remix only shows in the nav
+  once the crate has 2+ records (`[data-remix-link]`). Sharing: `#play=<base64 JSON>`
+  links carry `DJEngine.songParams` (NEVER code: Strudel evaluates code as JS, so a
+  code-carrying link is a drive-by script) and `engine.loadSong()` validates every field
+  before re-rendering, landing the record in the crate; ↗ opens code on strudel.cc (base64 in its hash —
+  verified against the live site). The old on-screen "DJ moves" event log is gone
   (`logEvent` is a `console.debug` shim — `SDJ.SetLog` recording + the ⬇ Log export
   survive; keep them, they're the diagnostic tuning loop). Agent-native surface:
-  `SDJ.live.*`, `SDJ.ab.*`, `SDJ.press.*`, `SDJ.remix.*`, `SDJ.curate.*`,
+  `SDJ.live.*` (incl. `retake/undo/restore/auto`), `SDJ.ab.*`, `SDJ.press.*`,
+  `SDJ.share.*`, `SDJ.remix.*`, `SDJ.curate.*`, `SDJ.demoRecords`,
   `SDJ.setGenre/setDensity/setOpinion`.
 - `src/curate.js` — the direction box's parser: free text → deterministic directives
   (`SDJ.Curate.parse`): lane bans/features ("no hihats", "more bass"), mood → a
@@ -100,7 +124,7 @@ Windows).
   **immediately** (reworked 2026-07-28 — steer-only felt dead): a ban drops an active
   lane from the committed track now and overrules a pending pitch on it (the DJ
   re-pitches); a feature brings an absent lane straight in; both also keep steering
-  future pitches via `s.banned['add:i']` + the part-mixer opinions. The chips are a
+  future pitches via `s.banned['add:i']` + the part opinions. The chips are a
   receipt of what happened ("no hi-hats — dropped", "slower — now 138 bpm") — don't
   route feedback through `setStatus`, `#status` is `sr-only` (visually hidden). The
   seed is never touched. Curation ban keys are tracked separately so clearing the box
