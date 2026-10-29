@@ -1582,6 +1582,13 @@
         cands.push({ kind: 'fill', layer: FILL_IDX, dir: 1, w: 0.9 * more, banKey: 'fill', desc: 'drop in a fill' });
       }
     }
+    // Shabda unreachable: nothing can be heard on the vocal lane, so don't ask
+    // anyone to judge a change to it (taking it out is still allowed)
+    if (s.vocalsOffline) {
+      for (let k = cands.length - 1; k >= 0; k--) {
+        if (cands[k].layer === VOCAL_IDX && cands[k].kind !== 'drop') cands.splice(k, 1);
+      }
+    }
     if (!cands.length) { s.pending = null; return null; }
 
     // Only now that we know a move exists do we advance the proposal clock — an

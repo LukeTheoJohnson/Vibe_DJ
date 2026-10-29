@@ -804,7 +804,7 @@
 
   function play(code, kind, name) {
     lastPlayedCode = code;
-    registerVocals(code, () => { if (lastPlayedCode === code) play(code, kind, name); });
+    registerVocals(code, () => { if (lastPlayedCode === code && nowPlaying.kind === kind) play(code, kind, name); });
     if (typeof window.evaluate === 'function') {
       cancelSilence(); // a new source releases any stop-enforcement window
       if (nowPlaying.kind && nowPlaying.kind !== kind && typeof window.hush === 'function') {
@@ -847,6 +847,14 @@
     const timeout = new Promise((res, rej) => setTimeout(() => rej(new Error('Shabda timed out')), VOCAL_TIMEOUT_MS));
     let load;
     try { load = Promise.resolve(window.samples('shabda/speech:' + fresh.join(','))); } catch (e) { load = Promise.reject(e); }
+    // a slow load that lands after the timeout still counts: vocals come back
+    load.then(() => {
+      if (!vocalsOffline) return;
+      vocalsOffline = false;
+      if (engine.song) engine.song.vocalsOffline = false;
+      fresh.forEach((n) => vocalNames.add(n));
+      flashChip('vocals back online', 'feature');
+    }, () => {});
     Promise.race([load, timeout]).then(
       () => { if (replay) replay(); },
       (err) => {
@@ -895,6 +903,7 @@
   }
 
   function stopAll() {
+    lastPlayedCode = ''; // a vocal landing after a stop must not bring the audio back
     enforceSilence(); // hush now and keep hushing through any in-flight evaluate
     setNowPlaying(null, '');
   }
@@ -1783,6 +1792,7 @@
   const REMIX_COLOUR_GROUP = {
     '#f43f7d': 'DRUMS', '#2ee6d6': 'DRUMS', '#ff9a1f': 'DRUMS', '#c3ccff': 'DRUMS',
     '#a64dff': 'BASS', '#2edb8b': 'CHORDS', '#ff4dd2': 'LEAD', '#4da6ff': 'AIR',
+    '#ffd23f': 'LEAD', // the vocal rides with the melody
   };
   const REMIX_GROUP_COLOUR = {
     DRUMS: '#2ee6d6', BASS: '#a64dff', CHORDS: '#2edb8b', LEAD: '#ff4dd2', AIR: '#4da6ff', OTHER: '#9d8fc7',
@@ -2615,6 +2625,10 @@
         SDJ.setOpinion(i, -1); set[i] = true; // the mixer shows the call
       });
       (d.features || []).forEach((i) => {
+        if (i === SDJ.VOCAL_IDX && vocalsOffline && !s.genome.active[i]) {
+          acted.notes.feature[i] = 'vocals offline';
+          return;
+        }
         // an absent lane comes straight in — pressed into both versions so an
         // un-judged pitch can't undo it
         const wasOut = !s.genome.active[i];
@@ -2647,12 +2661,24 @@
       const vi = SDJ.VOCAL_IDX;
       if (d.sing) {
         if (s.lyric !== d.sing) { s.lyric = d.sing; acted.changed = true; }
-        if (!s.genome.active[vi]) {
-          s.genome.active[vi] = true;
-          if (s.pending && s.pending.snapshot) s.pending.snapshot.active[vi] = true;
-          acted.changed = true;
+        const banned = (d.bans || []).indexOf(vi) >= 0;
+        if (banned || vocalsOffline) {
+          // the words are kept for later, but the lane stays as the ban / outage leaves it
+          acted.notes.sing = banned ? 'words kept, vocals banned' : 'words kept, vocals offline';
+        } else {
+          // a vocal add up for judging is overruled: you've said what it sings
+          if (s.pending && pitching === true && s.pending.layer === vi && s.pending.kind === 'add') {
+            engine.discardPending();
+            pitching = false;
+            acted.repitch = true;
+          }
+          if (!s.genome.active[vi]) {
+            s.genome.active[vi] = true;
+            if (s.pending && s.pending.snapshot) s.pending.snapshot.active[vi] = true;
+            acted.changed = true;
+          }
+          acted.notes.sing = 'now singing';
         }
-        acted.notes.sing = s.lyric ? 'now singing' : null;
         curSingSet = true;
       } else if (curSingSet) {
         s.lyric = null;
@@ -3091,6 +3117,7 @@
     line: function () { return engine.song ? engine.vocalLine() : null; },
     offline: function () { return vocalsOffline; },
     exportCode: withVocalLoads, // (code) → code with the Shabda load lines on top
+    retry: function () { vocalsOffline = false; vocalNames.clear(); if (engine.song) engine.song.vocalsOffline = false; },
   };
   // the A/B crossfader (agent-native): blend the pitch against the committed
   // track. set() returns whether the mix was audible (there was a pitch to blend).

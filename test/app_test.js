@@ -675,6 +675,10 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
     vShareEng.render().includes('s("hello_world")'));
   vocalSent.p.lyric = 'hello_world").fetch("evil';
   check('a share link with unsanitised words is refused', new window.SDJ.DJEngine().loadSong(vocalSent.p) === null);
+  window.SDJ.curate.set('no vocals, sing: banned words');
+  await sleep(20);
+  check('"no vocals" beats sing: in the same direction',
+    window.SDJ.engine.song.genome.active[window.SDJ.VOCAL_IDX] === false);
   window.SDJ.curate.set('no vocals');
   await sleep(20);
   check('"no vocals" takes the vocal off the record',
@@ -685,6 +689,40 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
   check('when Shabda is unreachable the set goes on without vocals',
     window.SDJ.vocals.offline() === true && window.SDJ.engine.song.vocalsOffline === true &&
     Array.from(doc.querySelectorAll('#curateChips .curate-chip')).some((c) => /vocals offline/.test(c.textContent)));
+  const oe = new window.SDJ.DJEngine();
+  oe.masterSeed = 0x5eed; oe.newSong(); oe.voteReset();
+  oe.song.genome.active = oe.song.genome.active.map(() => true);
+  oe.song.vocalsOffline = true;
+  let vocalPitchOffline = false;
+  for (let k = 0; k < 40; k++) {
+    const p = oe.proposeChange();
+    if (!p) break;
+    if (p.layer === window.SDJ.VOCAL_IDX && p.kind !== 'drop') vocalPitchOffline = true;
+    oe.rejectChange();
+  }
+  check('while offline the DJ pitches no vocal changes (rework / effect / double)', !vocalPitchOffline);
+  window.SDJ.curate.set('no vocals');
+  await sleep(20);
+  window.SDJ.curate.set('more vocals, sing: still here');
+  await sleep(20);
+  check('while offline, sing: and "more vocals" don’t press a silent vocal lane',
+    window.SDJ.engine.song.genome.active[window.SDJ.VOCAL_IDX] === false);
+  window.SDJ.curate.clear();
+  delete window.samples;
+  // a stop while a vocal is still loading must stay stopped
+  let resolveLoad;
+  window.samples = () => new Promise((res) => { resolveLoad = res; });
+  window.SDJ.vocals.retry();
+  await window.SDJ.live.start();
+  await sleep(20);
+  window.SDJ.curate.set('sing: late arrival');
+  await sleep(20);
+  window.SDJ.live.stop();
+  const evalsAtStop = evalCalls.length;
+  if (resolveLoad) resolveLoad();
+  await sleep(30);
+  check('a vocal landing after Stop doesn’t restart the audio',
+    !!resolveLoad && !evalCalls.slice(evalsAtStop).some((c) => c.includes('late_arrival')));
   window.SDJ.curate.clear();
   delete window.samples;
 
