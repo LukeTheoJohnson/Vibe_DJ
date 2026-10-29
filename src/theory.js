@@ -16,6 +16,8 @@
   // through tonal, which uses SPACE-separated names ("minor pentatonic"), NOT
   // camelCase. A camelCase name resolves to nothing and the whole n(...) layer
   // renders SILENT (zero events) while still showing in the code — no error.
+  // In the generated code the words are joined with ':' (see scaleName) — a
+  // bare space inside .scale("…") is split as mini-notation.
   const SCALES = [
     'minor',              // natural minor — the default dark canvas
     'dorian',             // minor with raised 6th — smooth R&B / neo-soul
@@ -172,6 +174,288 @@
     { id: 'synthwave', bpmLo: 84,  bpmHi: 108, label: 'Synthwave', scales: GENRE_SCALES.synthwave },
   ];
 
+  // ---- generative melody: the lead's phrase builder -----------------------
+  //
+  // The hand-written cells above all share one shape — an 8-step bar of
+  // degrees 0..7 in the same register — so however many there are, a set of
+  // reworks read as "the same lead again". The builder below composes a line
+  // from independent musical dimensions instead: a RHYTHM (a 16-step onset
+  // mask from a genre-weighted feel family, or a euclidean spread), a CONTOUR
+  // (arch, fall, pedal, zigzag…), a RANGE and starting degree, and a phrase
+  // FORM that develops the motif (repeat, sequence up a step, inversion,
+  // retrograde, a resolving answer, rhythmic displacement). Strong beats snap
+  // to chord tones when the phrase lines up with the progression. Every
+  // choice comes from the caller's seeded rng (or a variant-rotated pick), so
+  // the same seed + variant is the same line, note for note.
+
+  // 16-step onset masks ('x' = note, '.' = rest). 'T' opens a beat played as
+  // a triplet (the beat's other three cells are ignored).
+  const LEAD_RHYTHMS = {
+    sparse:     ['x.......x.....x.', '..x.......x.....', 'x.....x.........', 'x.......x.x.....',
+                 '....x.......x...', 'x..........x....', '......x.x.......', 'x...x...........'],
+    eighths:    ['x.x.x.x.x.x.x.x.', 'x.x...x.x.x...x.', 'x...x.x.x...x.x.', 'x.x.x...x.x.x...',
+                 '..x.x.x...x.x.x.', 'x.x.x.x.x...x...'],
+    synco:      ['x..x..x...x..x..', 'x..x..x.x..x....', '..x..x..x..x..x.', 'x..x...x..x..x..',
+                 'x...x..x..x.x...', '...x..x...x..x..', 'x..x..x.....x...'],
+    sixteenths: ['x.xxx.x.....x.x.', 'xxx.x...xxx.x...', 'x.x.xxx.x.x.xx..', '....xxxx..x.x.x.',
+                 'x.xx.xx.x.xx.x..', 'xxxx....x.x.....'],
+    long:       ['x.......x.......', 'x...........x...', 'x.......x...x...', 'x.....x.....x...',
+                 'x...............', '........x.......'],
+    offbeat:    ['..x...x...x...x.', '..x...x.....x.x.', '..x.x...x...x.x.', '.x...x...x...x..',
+                 '..x.....x.x...x.'],
+    pickup:     ['..........x.x.xx', '........x.x.x.x.', '......x.x.x.xx..', '.........x.x.xx.'],
+    triplet:    ['T...x.......T...', 'x...T...x...x...', '....T...T.......', 'T.......T...x...',
+                 'x.......T...T...', 'T...T...x.......'],
+  };
+
+  // Which feels each genre reaches for, most characteristic first. The
+  // caller rotates through this list by variant, so successive reworks
+  // change the rhythmic feel, not just the notes.
+  const LEAD_FEELS = {
+    trap:      ['triplet', 'synco', 'sparse', 'sixteenths', 'pickup', 'euclid', 'eighths'],
+    drill:     ['synco', 'triplet', 'sparse', 'sixteenths', 'euclid', 'pickup'],
+    boomBap:   ['sparse', 'synco', 'eighths', 'long', 'pickup', 'euclid'],
+    loFi:      ['long', 'sparse', 'synco', 'eighths', 'pickup', 'euclid'],
+    rb:        ['synco', 'long', 'sixteenths', 'triplet', 'sparse', 'pickup', 'euclid'],
+    rock:      ['eighths', 'synco', 'long', 'sixteenths', 'pickup', 'euclid'],
+    metal:     ['sixteenths', 'eighths', 'synco', 'triplet', 'long', 'euclid'],
+    house:     ['offbeat', 'synco', 'sparse', 'long', 'euclid', 'pickup'],
+    synthwave: ['eighths', 'long', 'synco', 'sixteenths', 'offbeat', 'euclid'],
+  };
+
+  // Contours: height (0..1) at position x (0..1) through the bar's notes.
+  const CONTOURS = [
+    (x) => x,                                        // rise
+    (x) => 1 - x,                                    // fall
+    (x) => Math.sin(Math.PI * x),                    // arch
+    (x) => 1 - Math.sin(Math.PI * x),                // valley
+    (x, k) => (k % 2 ? 0.75 : 0.25) + x * 0.2,       // zigzag, drifting up
+    (x) => 0.5 + 0.5 * Math.sin(Math.PI * 4 * x),    // wave
+    (x, k) => (k % 3 === 1 ? 0.35 : 0),              // pedal: hold the root, neighbour flicks
+    (x) => (x < 0.2 ? 1 : 1 - x),                    // leap up, then tumble
+    (x) => Math.floor(x * 3) / 2,                    // terrace: climb in steps
+    (x, k) => (k % 2 ? 1 : 0.6) - x * 0.3,           // hover high, sagging
+  ];
+
+  // Phrase forms. Each letter is one bar; primes are developed copies.
+  //   A  motif           B  answer (mirrored contour, resolves home)
+  //   S  A sequenced up   I  A inverted       R  A retrograde
+  //   D  A displaced      C  a contrasting bar (new rhythm, same feel)
+  const LEAD_FORMS = ['AB', 'A', 'AS', 'AAAB', 'ABAC', 'AI', 'AD', 'AR', 'ASAB', 'AC'];
+
+  function euclidMask(k, n, rot) {
+    const out = [];
+    for (let j = 0; j < n; j++) out.push(Math.floor((j * k) / n) !== Math.floor(((j + 1) * k) / n) ? 'x' : '.');
+    // rotate so the first onset need not sit on the downbeat
+    const r = ((rot % n) + n) % n;
+    return out.slice(n - r).concat(out.slice(0, n - r)).join('');
+  }
+
+  // rhythm mask -> list of slots: { beat, cell, trip } (trip = triplet slot 0..2)
+  function slotsOf(mask) {
+    const slots = [];
+    for (let b = 0; b < 4; b++) {
+      if (mask[b * 4] === 'T') { for (let t = 0; t < 3; t++) slots.push({ beat: b, trip: t }); continue; }
+      for (let c = 0; c < 4; c++) if (mask[b * 4 + c] === 'x') slots.push({ beat: b, cell: c });
+    }
+    return slots;
+  }
+
+  // render one bar (mask + one token per slot) as mini-notation
+  function barString(mask, toks) {
+    const hasTrip = mask.indexOf('T') >= 0;
+    let k = 0;
+    const beats = [];
+    for (let b = 0; b < 4; b++) {
+      if (mask[b * 4] === 'T') { beats.push('[' + toks[k++] + ' ' + toks[k++] + ' ' + toks[k++] + ']'); continue; }
+      const cells = [];
+      for (let c = 0; c < 4; c++) cells.push(mask[b * 4 + c] === 'x' ? toks[k++] : '~');
+      beats.push(cells);
+    }
+    // any odd 16th onset? then the bar needs the 16-step grid
+    let sixteenth = false;
+    for (let i = 1; i < 16; i += 2) if (mask[i] === 'x' && mask[i - (i % 4)] !== 'T') sixteenth = true;
+    if (!hasTrip) {
+      const flat = [];
+      beats.forEach((cs) => { if (sixteenth) flat.push.apply(flat, cs); else flat.push(cs[0], cs[2]); });
+      return flat.join(' ');
+    }
+    // with a triplet beat, every beat is its own group
+    return beats.map((cs) => (typeof cs === 'string' ? cs
+      : cs.every((c) => c === '~') ? '~'
+      : sixteenth ? '[' + cs.join(' ') + ']' : '[' + cs[0] + ' ' + cs[2] + ']')).join(' ');
+  }
+
+  // A full lead line. opts:
+  //   rng        seeded rng (variant-sensitive) for the fine detail
+  //   feel       rhythm family name (LEAD_FEELS entry) — rotated by the caller
+  //   contour    CONTOURS index — rotated by the caller
+  //   form       LEAD_FORMS entry — rotated by the caller
+  //   steps      scale steps per octave (5 pentatonic, 6 blues, 7 otherwise)
+  //   prog       the song's progression (scale-degree roots, one per cycle)
+  //   top        highest degree allowed (keeps the register sane)
+  // Returns the mini-notation for n("…"): one bar, or "<[bar] [bar] …>".
+  function melody(opts) {
+    const rng = opts.rng;
+    const O = opts.steps || 7;
+    const pick = (a) => a[Math.floor(rng() * a.length)];
+    const int = (lo, hi) => lo + Math.floor(rng() * (hi - lo + 1));
+    const top = opts.top != null ? opts.top : O + 4;
+    const newMask = () => (opts.feel === 'euclid'
+      ? euclidMask(int(3, 7), 16, int(0, 15))
+      : pick(LEAD_RHYTHMS[opts.feel] || LEAD_RHYTHMS.sparse));
+    const maskA = newMask();
+    // range: dense rhythms move stepwise in a narrow band; long notes leap wide
+    const dense = slotsOf(maskA).length;
+    const span = dense >= 9 ? int(3, 5) : dense <= 3 ? int(4, O + 2) : int(3, O);
+    const base = Math.max(0, Math.min(pick([0, 0, 2, 4, O - 1]), top - span));
+    const contour = CONTOURS[((opts.contour % CONTOURS.length) + CONTOURS.length) % CONTOURS.length];
+    const form = opts.form || 'AB';
+    const prog = opts.prog || [0];
+    // strong beats lock to chord tones only when each bar sits over one chord
+    const aligned = form.length % prog.length === 0 || prog.length === 1;
+    const clampD = (d) => Math.max(0, Math.min(top, d));
+
+    const tonesOf = (root) => {
+      const t = [];
+      for (let o = -1; o <= 2; o++) [0, 2, 4].forEach((x) => t.push(root + x + o * O));
+      return t.filter((d) => d >= 0 && d <= top);
+    };
+    const nearest = (d, list) => list.reduce((b, x) => (Math.abs(x - d) < Math.abs(b - d) ? x : b), list[0]);
+
+    // degrees for a mask under a contour function
+    const degreesFor = (mask, cfn, shift) => {
+      const sl = slotsOf(mask);
+      const n = sl.length;
+      const out = [];
+      let prev = null;
+      sl.forEach((s, k) => {
+        const x = n > 1 ? k / (n - 1) : 0;
+        let d = base + shift + Math.round(cfn(x, k) * span);
+        // break up long same-note runs with a neighbour step
+        if (prev !== null && d === prev && rng() < 0.5) d += rng() < 0.5 ? 1 : -1;
+        d = clampD(d);
+        out.push(d); prev = d;
+      });
+      return { sl, out };
+    };
+    const snap = (sl, out, root) => {
+      if (!aligned) return out;
+      const tones = tonesOf(root);
+      if (!tones.length) return out;
+      return out.map((d, k) => ((sl[k].cell === 0 || sl[k].trip === 0) ? nearest(d, tones) : d));
+    };
+    const tokens = (out) => out.map((d) => String(d));
+
+    // build bar A, then develop it per the form
+    const A = degreesFor(maskA, contour, 0);
+    const bars = [];
+    let maskC = null;
+    for (let b = 0; b < form.length; b++) {
+      const kind = form[b];
+      const root = prog[b % prog.length];
+      let mask = maskA;
+      let degs;
+      if (kind === 'A') degs = A.out.slice();
+      else if (kind === 'S') degs = A.out.map((d) => clampD(d + (rng() < 0.6 ? 2 : 1)));
+      else if (kind === 'I') {
+        const lo = Math.min.apply(null, A.out), hi = Math.max.apply(null, A.out);
+        degs = A.out.map((d) => clampD(lo + hi - d));
+      } else if (kind === 'R') degs = A.out.slice().reverse();
+      else if (kind === 'D') {
+        // displace the motif by an 8th: same notes, the accents land elsewhere
+        mask = maskA.indexOf('T') >= 0 ? maskA : maskA.slice(14) + maskA.slice(0, 14);
+        degs = A.out.slice();
+      } else if (kind === 'B') {
+        // the answer: mirrored contour on the same rhythm, landing on the tonic
+        degs = degreesFor(maskA, (x, k) => 1 - contour(x, k), 0).out;
+        degs[degs.length - 1] = pick([0, 0, 2, 4].filter((d) => d <= top));
+      } else {
+        if (!maskC) maskC = newMask();
+        mask = maskC;
+        degs = degreesFor(maskC, CONTOURS[(opts.contour + 3) % CONTOURS.length], 0).out;
+      }
+      const sl = slotsOf(mask);
+      degs = degs.slice(0, sl.length);
+      while (degs.length < sl.length) degs.push(base);
+      degs = snap(sl, degs, root);
+      const toks = tokens(degs);
+      // ornaments: a grace-note pair or a stutter on one weak note
+      if (toks.length > 2 && toks.length < 10 && rng() < 0.35) {
+        const at = int(1, toks.length - 1);
+        if (sl[at].trip == null) {
+          const d = degs[at];
+          toks[at] = rng() < 0.6 ? '[' + clampD(d + 1) + ' ' + d + ']' : d + '*2';
+        }
+      }
+      bars.push(barString(mask, toks));
+    }
+    if (bars.length === 1) return bars[0];
+    return '<' + bars.map((b) => '[' + b + ']').join(' ') + '>';
+  }
+
+  // ---- bass figures --------------------------------------------------------
+  //
+  // A bass figure is a one-bar template over each chord: R = the chord root,
+  // O = root up an octave, F = the fifth, P = a passing note into the NEXT
+  // chord's root, N = the next root itself (an anticipation), ~ = rest.
+  // bassFigure() expands it chord by chord into "<[bar] [bar] …>", so octave
+  // jumps, fifths and walk-ups follow the harmony in any scale.
+  const BASS_FIGURES = {
+    sub808: ['R ~ ~ ~ ~ ~ ~ ~', 'R ~ ~ ~ R ~ ~ ~', 'R ~ ~ R ~ ~ ~ ~', 'R ~ R ~ ~ ~ R ~',
+             'R ~ ~ ~ ~ ~ R ~', 'R ~ ~ R ~ ~ R ~', 'R ~ ~ O ~ ~ ~ ~', 'R ~ ~ ~ O ~ R ~',
+             'R ~ ~ R ~ ~ ~ N', 'R ~ R ~ ~ ~ ~ [~ R]', 'R ~ ~ ~ ~ F ~ ~', 'R ~ ~ ~ R ~ [O ~] ~'],
+    house:  ['~ R ~ R ~ R ~ R', '~ R ~ R ~ R ~ [R R]', '~ R ~ [R R] ~ R ~ R', '~ R ~ O ~ R ~ O',
+             '~ R ~ R ~ F ~ O', '~ R R ~ ~ R ~ N', '[~ R] [~ R] [~ O] [~ R]', '~ R ~ R ~ R ~ P'],
+    wave:   ['R R R R R R R R', 'R ~ R R R ~ R R', 'R R R ~ R R R ~', 'R R O R R O R R',
+             'R R R R F F O O', 'R O R O R O R O', 'R R O R F R O N'],
+    rock:   ['R ~ R R ~ R R ~', 'R R ~ R R ~ R R', 'R ~ R ~ R R ~ R', 'R R R R R R F O',
+             'R ~ R F ~ R O ~', 'R ~ ~ R F ~ R P', 'R R F R R F O R'],
+    metal:  ['R R R R R R R R', 'R R R R R R [R R] R', '[R R] R R R [R R] R R R', 'R R R R R R F O',
+             '[R R] R [R R] R [R R] R F O', 'R R ~ R R ~ R F', 'R R R F R R R O'],
+    melodic:['R ~ ~ ~ R ~ ~ ~', 'R ~ ~ R R ~ ~ ~', 'R ~ R ~ R ~ R R', 'R R ~ R R ~ R R',
+             'R ~ R ~ ~ ~ R ~', 'R ~ ~ F ~ ~ P ~', 'R ~ O ~ F ~ P ~', 'R ~ ~ R ~ F ~ ~',
+             'R ~ ~ [~ R] ~ ~ F ~', 'R ~ F ~ O ~ F P'],
+  };
+
+  function bassFigure(prog, tpl, steps) {
+    const O = steps || 7;
+    const F = O === 5 ? 3 : 4; // the fifth: degree 3 in a pentatonic, 4 otherwise
+    const bars = prog.map((root, i) => {
+      const next = prog[(i + 1) % prog.length];
+      const pass = next > root ? next - 1 : next + 1;
+      return tpl.replace(/[ROFPN]/g, (c) => String(
+        c === 'R' ? root : c === 'O' ? root + O : c === 'F' ? root + F : c === 'P' ? pass : next));
+    });
+    return '<' + bars.map((b) => '[' + b + ']').join(' ') + '>';
+  }
+
+  // Voice-led chords: each chord takes whichever inversion of the voicing sits
+  // closest to the one before it, so the comping moves by small steps instead
+  // of jumping in parallel blocks. Degrees never go below 0.
+  function ledSeq(prog, kind, pentatonic, steps) {
+    const O = steps || (pentatonic ? 5 : 7);
+    let prevMid = null;
+    const out = prog.map((d) => {
+      const base = Theory.voicing(kind, d, pentatonic).slice().sort((a, b) => a - b);
+      const cands = [];
+      let v = base.slice();
+      for (let inv = 0; inv < base.length; inv++) {
+        cands.push(v.slice());
+        if (v[0] - O >= 0) cands.push(v.map((x) => x - O));
+        v = v.slice(1).concat([v[0] + O]);
+      }
+      const mid = (c) => c.reduce((a, b) => a + b, 0) / c.length;
+      let best = cands[0];
+      if (prevMid !== null) {
+        best = cands.reduce((b, c) => (Math.abs(mid(c) - prevMid) < Math.abs(mid(b) - prevMid) ? c : b), cands[0]);
+      }
+      prevMid = mid(best);
+      return '[' + best.join(',') + ']';
+    });
+    return '<' + out.join(' ') + '>';
+  }
+
   const Theory = {
     ROOTS,
     SCALES,
@@ -181,6 +465,20 @@
     MELODY_PHRASES,
     DRUM_BANKS,
     GENRES,
+    LEAD_RHYTHMS,
+    LEAD_FEELS,
+    LEAD_FORMS,
+    CONTOUR_COUNT: CONTOURS.length,
+    BASS_FIGURES,
+    melody,
+    bassFigure,
+    ledSeq,
+
+    // Scale steps per octave — the degree distance of an octave in n().scale():
+    // 5 in a pentatonic, 6 in the blues scale, 7 in every mode here.
+    stepsIn(scale) {
+      return /pentatonic/.test(scale) ? 5 : /blues/.test(scale) ? 6 : 7;
+    },
 
     // The mood palette for a genre — the subset of SCALES it draws on. Falls back
     // to the full palette for a genre with no declared mood set (or no genre).
@@ -188,9 +486,14 @@
       return (genre && genre.scales && genre.scales.length) ? genre.scales : SCALES;
     },
 
-    // Build a Strudel scale string, e.g. "C3:minor"
+    // Build a Strudel scale string, e.g. "C3:minor" or "C3:harmonic:minor".
+    // The scale argument is itself parsed as mini-notation, so a SPACE splits
+    // it into a two-step sequence: "A2:harmonic minor" played the first half of
+    // every bar in a broken scale and dropped or repeated the second half
+    // (probed on @strudel/web 1.3.0). Strudel reads ':' as the word separator
+    // ("A2:minor:pentatonic"), so multi-word names are joined with colons.
     scaleName(root, octave, type) {
-      return root + octave + ':' + type;
+      return root + octave + ':' + String(type).split(' ').join(':');
     },
 
     // Triad rooted on scale degree d: d, d+2, d+4
