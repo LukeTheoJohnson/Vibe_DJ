@@ -67,6 +67,8 @@
   const FX_NAMES = { 1: 'delay', 2: 'crush', 4: 'wash', 8: 'width' };
   const FILL_IDX = LANES;                    // pseudo-lane for the fill line, just past the real lanes (maps a code line for A&R)
   const FILL_COLOR = '#c3ccff';
+  const ADD_GIVE_UP = 2; // a part binned this often stops holding back the deeper moves
+  const BLEND_BARS = 4; // a blended part's versions take turns a whole phrase each, so both hear every chord
   const FILL_NAMES = ['', 'a riser', 'a snare build', 'an impact'];
   // Lanes whose double is an octave shadow (pure n() melodic voices — bass,
   // chords, lead); the rest get a timing-ghost so we never transpose a sample
@@ -134,7 +136,13 @@
     g.variant = pad(g.variant, 0);
     g.fx = pad(g.fx, 0);
     g.double = pad(g.double, false);
+    g.alt = pad(g.alt, null).map(copyAlt);
     return g;
+  }
+  // A blended lane's other version: { variant, fx, double } (null = not blended).
+  // The lane renders both and alternates them every BLEND_BARS bars.
+  function copyAlt(a) {
+    return a && typeof a === 'object' ? { variant: a.variant | 0, fx: a.fx | 0, double: !!a.double } : null;
   }
   const lanesOf = (v) => { const a = []; for (let i = 0; i < LANES; i++) a.push(v); return a; };
 
@@ -147,6 +155,7 @@
       active: g.active.slice(), variant: g.variant.slice(),
       energyIdx: g.energyIdx, bank: g.bank,
       fx: g.fx.slice(), double: g.double.slice(), fill: g.fill,
+      alt: (g.alt || lanesOf(null)).map(copyAlt),
     };
   }
   function restoreGenome(g, snap) {
@@ -157,6 +166,7 @@
     g.fx = snap.fx.slice();
     g.double = snap.double.slice();
     g.fill = snap.fill;
+    g.alt = (snap.alt || lanesOf(null)).map(copyAlt);
   }
 
   // Turn-based sets never pitch energy moves, so intensity ramps with the
@@ -217,6 +227,7 @@
         fx: lanesOf(0),                      // per-lane FX bitmask (FX_BITS)
         double: lanesOf(false),              // per-lane second voice
         fill: 0,                             // song-level fill/riser (0 = none, 1..3)
+        alt: lanesOf(null),                  // per-lane blend: the other version, alternating
       },
       // optimiser state
       approval: 50,      // fitness: smoothed crowd approval (0..100), starts neutral
@@ -694,6 +705,7 @@
       g.fx.join('.'),
       g.double.map((d) => (d ? 1 : 0)).join(''),
       g.fill,
+      (g.alt || []).map((a) => (a ? a.variant + '/' + a.fx + '/' + (a.double ? 1 : 0) : '-')).join('.'),
     ].join(':');
   };
 
@@ -1305,6 +1317,38 @@
       lineLayers.push(FILL_IDX);
     }
 
+    // Blended lanes: render the lane again as its other version (g.alt) and
+    // alternate the two, BLEND_BARS bars each — two vocals take turns, an
+    // effect comes and goes. One body line per lane, so the A/B diff, the
+    // arranged track and the remix stems all treat it as that lane.
+    if (!this._renderingAlt && g.alt && g.alt.some((a, i) => a && g.active[i])) {
+      const keep = { variant: g.variant.slice(), fx: g.fx.slice(), double: g.double.slice() };
+      g.alt.forEach((a, i) => { if (a && g.active[i]) { g.variant[i] = a.variant; g.fx[i] = a.fx; g.double[i] = a.double; } });
+      this._renderingAlt = true;
+      try { this.render(); } finally {
+        this._renderingAlt = false;
+        g.variant = keep.variant; g.fx = keep.fx; g.double = keep.double;
+      }
+      const altLines = this._lastLines, altLayers = this._lastLayers;
+      g.alt.forEach((a, i) => {
+        if (!a || !g.active[i]) return;
+        const mine = layers.filter((_, k) => lineLayers[k] === i);
+        const other = altLines.filter((_, k) => altLayers[k] === i);
+        if (!mine.length || !other.length) return;
+        const at = lineLayers.indexOf(i);
+        // masks, not arrange(): arrange restarts each section at its own bar 1, so
+        // the second version replayed its opening bars over later chords (a
+        // blended bass hit F under a B♭). A mask keeps both on the song's clock.
+        const on = Array(BLEND_BARS).fill(1).concat(Array(BLEND_BARS).fill(0)).join(' ');
+        const off = Array(BLEND_BARS).fill(0).concat(Array(BLEND_BARS).fill(1)).join(' ');
+        const both = 'stack(stack(' + mine.join(', ') + ').mask("<' + on + '>"), stack(' +
+          other.join(', ') + ').mask("<' + off + '>"))';
+        for (let k = layers.length - 1; k >= 0; k--) if (lineLayers[k] === i) { layers.splice(k, 1); lineLayers.splice(k, 1); }
+        layers.splice(at, 0, both);
+        lineLayers.splice(at, 0, i);
+      });
+    }
+
     const body = layers.join(',\n  ');
     this._lastLayers = lineLayers; // body-line -> stage index, for A&R highlighting
     this._lastLines = layers.slice(); // the body lines themselves — renderAB() recombines them
@@ -1548,7 +1592,9 @@
       p.laneMood.every((v) => typeof v === 'number' && v >= -1 && v <= 1) &&
       g && typeof g === 'object' && bools(g.active) && ints(g.variant, 0, 1e6) &&
       int(g.energyIdx, 0, ENERGY_STEPS.length - 1) && int(g.bank, 0, Math.max(0, BANKS.length - 1)) &&
-      ints(g.fx, 0, 15) && bools(g.double) && int(g.fill, 0, FILL_NAMES.length - 1);
+      ints(g.fx, 0, 15) && bools(g.double) && int(g.fill, 0, FILL_NAMES.length - 1) &&
+      (g.alt == null || (lenOk(g.alt) && g.alt.every((a) => a === null ||
+        (a && typeof a === 'object' && int(a.variant, 0, 1e6) && int(a.fx, 0, 15) && typeof a.double === 'boolean'))));
     if (!ok) return null;
     const s = this.newSong();
     s.seed = p.seed >>> 0;
@@ -1623,7 +1669,7 @@
   DJEngine.prototype.voteReset = function () {
     const s = this.song;
     if (!s) return;
-    s.banned = {};    // "add:i" the user killed — that instrument stays out for the song
+    s.banned = {};    // killed FX / doubles / fills, and curation bans ("no hats") — out for the song
     s.vtabu = {};     // layer -> proposal count until which it won't be re-pitched (spacing)
     s.vprop = 0;      // proposals made this session (drives the tabu spacing)
     s.pending = null;
@@ -1653,9 +1699,9 @@
     // Build the candidate moves. Adds bring the skeleton in first; once three
     // lanes are down, the deeper moves unlock — rework, FX, a doubled voice, or
     // a fill — so a session keeps finding fresh things to pitch instead of
-    // capping out at a handful of instruments. A killed idea is banned (never
-    // re-pitched); a killed *rework* is only spaced out, and rework is never
-    // banned, so the session can't dead-end while any lane is still playable.
+    // capping out at a handful of instruments. A killed FX / double / fill is
+    // banned (never re-pitched); a killed *add* or *rework* is only spaced out
+    // (a no to that version, not the part), so the session can't dead-end.
     const activeLanes = [];
     for (let i = 0; i < g.active.length; i++) if (g.active[i]) activeLanes.push(i);
     const more = 1 + Math.max(0, intent) * 0.8, less = 1 + Math.max(0, -intent) * 0.8;
@@ -1673,7 +1719,9 @@
       const spine = i === 2 ? 2.5 : 1;
       cands.push({ kind: 'add', layer: i, dir: 1, w: 3 * more * spine * (likes(i) ? 2.5 : 1), banKey: 'add:' + i, desc: 'bring in ' + STAGES[i].label });
     });
-    const addCands = cands.length; // how many lanes could still come in
+    // how many lanes could still come in — a part binned twice doesn't count, so
+    // effects / doubles / fills unlock instead of waiting on adds you keep binning
+    const addCands = cands.filter((c) => !((s.addBins && s.addBins[c.layer]) >= ADD_GIVE_UP)).length;
     // drops — a part you marked "drop" gets pitched for removal (never the kick).
     droppableIdxs(g).forEach((i) => {
       if (dislikes(i) && !s.banned['drop:' + i]) {
@@ -1742,10 +1790,21 @@
       g.fill = Rng.int(r, 1, 3);
       pick.desc = g.fill ? 'drop in ' + FILL_NAMES[g.fill] : 'drop in a fill';
     }
+    touchAlt(g, pick.kind, pick.layer, pick.bit);
     s.vtabu[pick.kind + ':' + pick.layer] = s.vprop + 2; // hold this move (kind+lane) out of the next couple of pitches
     s.pending = { snapshot: snapshot, desc: pick.desc, layer: pick.layer, dir: pick.dir, kind: pick.kind, banKey: pick.banKey, bit: pick.bit, take: 1 };
     return { desc: pick.desc, layer: pick.layer, dir: pick.dir, kind: pick.kind, take: 1 };
   };
+
+  // A change on a blended lane: a rework or a drop leaves one version (the new
+  // one); an effect or a double goes on both, so the blend keeps alternating.
+  function touchAlt(g, kind, layer, bit) {
+    const a = g.alt && g.alt[layer];
+    if (!a) return;
+    if (kind === 'reshape' || kind === 'drop' || kind === 'add') g.alt[layer] = null;
+    else if (kind === 'fx') a.fx |= bit;
+    else if (kind === 'double') a.double = true;
+  }
 
   // FX bits a lane could still take on a retake: not on the committed lane,
   // not banned, and not the take being replaced.
@@ -1797,6 +1856,7 @@
       g.fill = Rng.pick(r, others);
       p.desc = 'drop in ' + FILL_NAMES[g.fill];
     }
+    touchAlt(g, p.kind, l, p.bit);
     p.take = (p.take || 1) + 1;
     return { desc: p.desc, layer: l, dir: p.dir, kind: p.kind, take: p.take };
   };
@@ -1846,6 +1906,29 @@
     return { desc: p.desc, layer: p.layer, kind: p.kind, dir: p.dir, index: s.kept.length - 1 };
   };
 
+  // Can the pending pitch be blended — kept alongside how the part was, the two
+  // alternating? Only a change to a part that's already playing has two
+  // versions to alternate: a rework, an effect, a doubled voice.
+  DJEngine.prototype.canBlend = function () {
+    const s = this.song;
+    const p = s && s.pending;
+    if (!p || !p.snapshot || p.layer == null || p.layer >= LANES) return false;
+    if (p.kind !== 'reshape' && p.kind !== 'fx' && p.kind !== 'double') return false;
+    return !!(p.snapshot.active[p.layer] && s.genome.active[p.layer]);
+  };
+
+  // Blend: keep the pitched change and the part as it was, taking turns every
+  // BLEND_BARS bars. Kept like any other keep (a restore point, an up-vote).
+  DJEngine.prototype.blendChange = function () {
+    if (!this.canBlend()) return null;
+    const s = this.song, g = s.genome, p = s.pending, l = p.layer, snap = p.snapshot;
+    g.alt[l] = { variant: snap.variant[l], fx: snap.fx[l] | 0, double: !!snap.double[l] };
+    p.desc = 'blend: ' + p.desc + ', taking turns with the old one';
+    const out = this.acceptChange();
+    out.blend = true;
+    return out;
+  };
+
   // Kill the pitched change: revert the genome and ban this idea for the song.
   DJEngine.prototype.rejectChange = function () {
     const s = this.song;
@@ -1856,6 +1939,14 @@
     if (!s.vtabu) s.vtabu = {};
     if (p.kind === 'reshape') {
       s.vtabu['reshape:' + p.layer] = (s.vprop || 0) + 3; // a killed rework: space out further reworks on this lane (E-8)
+    } else if (p.kind === 'add') {
+      // a binned add is a no to THAT version, not to the part: hold it back
+      // (longer each time), then it comes back as another version. Banning it
+      // for the song left sets stuck reworking a kick and a lead (2026-10-29);
+      // keeping a part out for good is the part chip's "drop" / "no hats".
+      const bins = ((s.addBins = s.addBins || {})[p.layer] || 0) + 1;
+      s.addBins[p.layer] = bins;
+      s.vtabu['add:' + p.layer] = (s.vprop || 0) + 3 * bins;
     } else {
       s.banned[p.banKey] = true;             // a killed add / FX / double / fill stays out for the song
     }
@@ -1899,6 +1990,7 @@
   SDJ.STAGES = STAGES;
   SDJ.LANE_COLORS = LANE_COLORS;
   SDJ.FILL_IDX = FILL_IDX;
+  SDJ.ADD_GIVE_UP = ADD_GIVE_UP;
   SDJ.VOCAL_IDX = VOCAL_IDX;
   DJEngine.normaliseGenome = normaliseGenome;
   SDJ.FILL_COLOR = FILL_COLOR;

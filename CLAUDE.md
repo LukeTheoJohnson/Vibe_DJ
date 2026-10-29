@@ -47,8 +47,17 @@ Windows).
 - `src/dj.js` — **the brain**. `DJEngine` holds the track as a genome and exposes:
   - `newSong()` — fresh seeded track (key/scale/tempo/progression, stage 0 = just kick).
   - `proposeChange()` / `acceptChange()` / `rejectChange()` — the turn-based flow the
-    Live set runs on. A rejected add/FX/double/fill is banned for the song; a rejected
-    rework is only spaced out (so pitching never dead-ends).
+    Live set runs on. A rejected FX/double/fill is banned for the song; a rejected add
+    or rework is only spaced out (an add for 3 × its bin count pitches, `s.addBins`), so
+    pitching never dead-ends — binning every add once used to strand a set on kick +
+    lead. Keeping a part out for good is the part chip's drop / "no hats" (`s.banned`).
+  - `canBlend()` / `blendChange()` — **Blend**: keep a change to a part that's already
+    playing (rework / FX / double) AND the part as it was; `g.alt[i] = { variant, fx,
+    double }` holds the other version and `render()` renders the lane both ways as
+    `stack(new.mask("<1 1 1 1 0 0 0 0>"), old.mask("<0 0 0 0 1 1 1 1>"))` (a four-bar phrase each, so both versions hear the whole progression) (`BLEND_BARS`; NOT `arrange`, which restarts each section at bar 1 and knocks the old version off the chords), one body line on that
+    lane. A rework or drop of a blended lane clears the blend; an FX/double lands on
+    both (`touchAlt`). `alt` rides in clone/restore, `_signature`, share links
+    (`loadSong` validates it) and crate genomes.
   - `render()` — compile the genome → an idiomatic Strudel `stack(...)` string. Also
     stashes `_lastLines`/`_lastLayers` (body lines + their lane indices).
   - `abLevel()` / `abDiff()` — the With side's loudness match (an add is louder, and
@@ -115,14 +124,24 @@ Windows).
   carries into the crate for genome-bearing entries; `LAYER_HUE` faces only legacy
   entries. Same seed → same disc everywhere.
 - `src/app.js` — Strudel init, the deck rig (Deck A committed record / Deck B acetate /
-  A/B pick), the save modal, the **Steer the DJ** column (direction box, folded genre +
+  A/B pick), laid out DAW-style since 2026-10-29 (after GarageBand's track list):
+  a transport bar (`.lcd` readout + set controls) across the top; **Tracks** — one row
+  per part, the part chips (`#stageChips`) as row heads lined up with that part's notes
+  on `#roll`, drawn by `drawLanes` from Strudel's `Pattern.draw(cb, {id, lookbehind,
+  lookahead})` (a note's `.color()` picks its row; the suggested part lights amber while
+  With plays; replaces `.pianoroll()` on Live only — the remix floor keeps it); the
+  **decide** panel full width underneath (both records small, the suggestion, Without /
+  With, Bin · Another take · Keep, the mini visualiser tile; sticky to the screen bottom
+  on narrow/short screens); and Steer down the right with a Live code / Set history tab
+  switch (`sdj.sideTab`). The save modal, the **Steer the DJ** column (direction box, folded genre +
   density, and the live code panel filling the rest — a +/− diff while a change is up
   on With), the compact set history (kept rows carry a ↶ restore point), the
   `localStorage` crate and the remix console. The Live verdict buttons read
-  **"✓ Keep the change" / "✗ Bin the change"** plus **↻ Another take**, the A/B pick is
+  **"✓ Keep the change" / "✗ Bin the change"** plus **↻ Another take** and **⇄ Blend both**
+  (`#sgBlend`, greyed out for adds/drops/fills), the A/B pick is
   two big **Without / With** buttons (`#abTrack`/`#abChange`), and **◉ Save track**
   (`#saveBtn`), **↶ Undo** and **⟳ Let it run** (auto-keep after 8 bars; never auto-saves)
-  sit in the rig head. Keyboard: Space switch · K keep · X bin · R take · S save ·
+  sit in the rig head. Keyboard: Space switch · K keep · X bin · R take · B blend · S save ·
   Z/Ctrl+Z undo · L let it run (`onLiveKey`, ignored while typing). Per-part steer is
   the part chips (`#stageChips` buttons: DJ decides → feature → drop) — the old 7×3
   part mixer is gone. First visit: three demo records (`buildDemos`, fixed seeds,
@@ -203,6 +222,6 @@ Musical-quality guards (from the 2026-07-23 shippability audit):
 - `render()` re-evaluates only when the engine's `_signature()` changes; the crossfader
   and remix faders throttle their own evaluates (~130ms) instead.
 - The save prompt treats a track as full at `MIN_FULL` parts **or** when no more lanes
-  are addable (skipped adds are banned per-song) — without the second clause a session
-  with a few skipped adds could never reach the press prompt.
+  are addable (curation bans / dropped parts) — without the second clause a session
+  with parts ruled out could never reach the press prompt.
 - Vinyl SVG ids are seeded per-disc (`uid`) so multiple discs on one page don't collide.

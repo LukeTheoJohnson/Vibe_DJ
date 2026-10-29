@@ -78,7 +78,7 @@
       // deck production controls + unified transport
       'saveBtn', 'transport', 'tpKind', 'tpName', 'tpStop',
       // the DJ's suggestion card + tuning (genre pills, density, part mixer) + status
-      'sgEmpty', 'sgCard', 'sgKind', 'sgDesc', 'sgAsk', 'sgActions', 'sgApprove', 'sgSkip', 'sgRetake', 'sgSaveHint',
+      'sgEmpty', 'sgCard', 'sgKind', 'sgDesc', 'sgAsk', 'sgActions', 'sgApprove', 'sgSkip', 'sgRetake', 'sgBlend', 'sgSaveHint',
       'liveDensity', 'liveGenrePills',
       // undo, lean-back mode, open-in-Strudel, the first-run tips
       'undoBtn', 'autoBtn', 'autoNote', 'codeOpen', 'coach', 'coachText', 'coachNext', 'coachSkip',
@@ -92,6 +92,8 @@
       'playerViz', 'visualStage', 'visualCanvas',
       // the Live floor's mini visualiser tile
       'liveViz',
+      // the Steer column's tabs: live code / set history
+      'tabCode', 'tabHist', 'codePanel', 'histPanel',
       // the pressing modal (the save moment)
       'pressModal', 'pressDisc', 'pressName', 'pressMeta', 'pressVersion',
       'pressConfirm', 'pressCancel', 'pressLoop', 'pressFull', 'pressFormatHint',
@@ -112,9 +114,10 @@
       'nudge', 'nudgeVal', 'tempo', 'padStutter', 'padGate', 'padEcho',
     ].forEach((id) => (el[id] = $(id)));
 
-    // The floor now hosts Strudel's own pianoroll (the crowd viz was retired).
-    // We keep a 2d context on SDJ so the appended .pianoroll({ ctx }) can find it.
+    // The track rows draw into #roll from Strudel's draw loop (drawLanes, below);
+    // the remix floor still uses Strudel's own .pianoroll({ ctx }).
     SDJ._rollCtx = el.roll ? el.roll.getContext('2d') : null;
+    SDJ._drawLanes = drawLanes;
     SDJ._remixRollCtx = el.remixRoll ? el.remixRoll.getContext('2d') : null;
 
     el.startBtn.addEventListener('click', onStartStop);
@@ -124,6 +127,7 @@
     if (el.sgApprove) el.sgApprove.addEventListener('click', () => liveDecide(true));
     if (el.sgSkip) el.sgSkip.addEventListener('click', () => liveDecide(false));
     if (el.sgRetake) el.sgRetake.addEventListener('click', liveRetake);
+    if (el.sgBlend) el.sgBlend.addEventListener('click', liveBlend);
     if (el.undoBtn) el.undoBtn.addEventListener('click', liveUndo);
     if (el.autoBtn) el.autoBtn.addEventListener('click', () => setAuto(!autoRun));
     if (el.codeOpen) el.codeOpen.addEventListener('click', () => {
@@ -134,6 +138,10 @@
       const b = e.target.closest && e.target.closest('.frestore');
       if (b) restoreTo(+b.closest('li').dataset.keep);
     });
+    // the Steer column's tabs: the live code or the set history
+    if (el.tabCode) el.tabCode.addEventListener('click', () => showSideTab('code'));
+    if (el.tabHist) el.tabHist.addEventListener('click', () => showSideTab('hist'));
+    try { if (localStorage.getItem(SIDE_TAB_KEY) === 'hist') showSideTab('hist'); } catch (e) { /* storage blocked: fine */ }
     if (el.coachNext) el.coachNext.addEventListener('click', () => coachAdvance());
     if (el.coachSkip) el.coachSkip.addEventListener('click', coachDone);
     document.addEventListener('keydown', onLiveKey);
@@ -317,14 +325,15 @@
   // the acetate's centre mark per pitch kind (what Deck B's test cut wears)
   const KIND_GLYPHS = { add: '+', drop: '−', reshape: '≈', fx: '✦', double: '≡', fill: '▲', save: '◉' };
 
-  // Lanes that could still be brought in: inactive, not binned for the song,
-  // not marked "drop" on the mixer. When this hits zero the track is as full
+  // Lanes that could still be brought in: inactive, not banned, not binned
+  // twice (SDJ.ADD_GIVE_UP), not marked "drop" on the mixer. When this hits zero the track is as full
   // as it can get — treat that as full, or the press prompt never comes.
   function addableLanes() {
     const s = engine.song, g = s.genome, lm = s.laneMood || [];
     let n = 0;
     for (let i = 1; i < g.active.length; i++) {
-      if (!g.active[i] && !(s.banned && s.banned['add:' + i]) && !(lm[i] < -0.3)) n++;
+      if (!g.active[i] && !(s.banned && s.banned['add:' + i]) && !(lm[i] < -0.3) &&
+          !((s.addBins && s.addBins[i]) >= SDJ.ADD_GIVE_UP)) n++;
     }
     return n;
   }
@@ -351,6 +360,14 @@
       (p.take > 1 ? ' (take ' + p.take + ')' : ''),
       '✓ Keep the change', '✗ Bin the change', 'Keep this change in your track?');
     if (el.sgRetake) { el.sgRetake.hidden = false; el.sgRetake.disabled = !engine.canRetake(); }
+    if (el.sgBlend) {
+      const can = engine.canBlend();
+      el.sgBlend.hidden = false;
+      el.sgBlend.disabled = !can;
+      el.sgBlend.title = can
+        ? 'Keep both: the change and the part as it was take turns, a four-bar phrase each. (B)'
+        : 'Blend needs a part that’s already playing to change: there’s only one version of this.';
+    }
     showPitchCode(); // the code panel shows the change as a diff
     renderDeckB(p);
     showFader(true);
@@ -374,6 +391,22 @@
     return true;
   }
 
+  // Blend: keep the change AND the part as it was. The two take turns every
+  // four-bar phrase (two vocals alternate, an effect comes and goes). Kept like a keep.
+  function liveBlend() {
+    if (!running || pitching !== true || !engine.canBlend()) return false;
+    const p = engine.blendChange();
+    if (!p) return false;
+    if (SDJ.SetLog) SDJ.SetLog.mark('vote', { v: 'blend', desc: p.desc, how: 'hand' });
+    pushFeed('⇄', p.desc, 'blended', 'up', p.index);
+    logEvent('⇄ blended: ' + p.desc);
+    evaluateCurrent(false);
+    pitching = false;
+    coachAdvance(1);
+    livePitch();
+    return true;
+  }
+
   // settled=true when the whole vocabulary is exhausted (nothing left to pitch).
   function presentSave(settled) {
     pitching = 'save';
@@ -383,6 +416,7 @@
               : 'This is sounding full. Save it?',
       '◉ Save track', 'Keep building', 'Save it to your crate now?');
     if (el.sgRetake) el.sgRetake.hidden = true;
+    if (el.sgBlend) el.sgBlend.hidden = true;
     // Deck B shows the finished record, ready for the press
     if (el.deckBDisc) el.deckBDisc.innerHTML = committedDisc();
     showFader(false);
@@ -561,6 +595,7 @@
     } else if (k === 'k') liveDecide(true);
     else if (k === 'x') liveDecide(false);
     else if (k === 'r') liveRetake();
+    else if (k === 'b') liveBlend();
     else if (k === 's') onSaveCurrent();
     else if (k === 'z') liveUndo();
     else if (k === 'l') setAuto(!autoRun);
@@ -573,7 +608,7 @@
   const COACH_KEY = 'sdj.coachDone';
   const COACH = [
     { target: 'abWrap', text: 'Listen both ways. Click Without and With (or press Space) to hear your track without and with the DJ’s suggestion.' },
-    { target: 'sgActions', text: 'Then decide. Keep puts the change in your track, Bin throws it out, and Another take tries a different version of the same idea.' },
+    { target: 'sgActions', text: 'Then decide. Keep puts the change in your track, Bin throws it out, Another take tries a different version, and Blend keeps both, taking turns.' },
     { target: 'saveBtn', text: 'Save track puts it in your crate whenever you like. It doesn’t have to be finished, and Undo takes back any keep.' },
   ];
   let coachStep = -1;
@@ -611,7 +646,10 @@
       tgt.classList.add('coach-target');
       const r = tgt.getBoundingClientRect();
       const w = el.coach.offsetWidth || 300;
-      el.coach.style.top = Math.round(r.bottom + window.scrollY + 10) + 'px';
+      const h = el.coach.offsetHeight || 120;
+      // below the target, unless that's off the bottom of the screen (the decide panel is)
+      const below = r.bottom + 10 + h <= window.innerHeight;
+      el.coach.style.top = Math.round((below ? r.bottom + 10 : Math.max(8, r.top - h - 10)) + window.scrollY) + 'px';
       el.coach.style.left = Math.round(clamp(r.left + window.scrollX, 8, Math.max(8, window.innerWidth - w - 8))) + 'px';
     }
   }
@@ -753,13 +791,104 @@
   // .pianoroll() is a Pattern method in the @strudel/web bundle; it draws into
   // the ctx we hand it. We append it ONLY to the audio string, never to
   // render(), so the code panel and crate saves stay clean (and never spawn
-  // Strudel's full-screen fallback canvas). Per-layer .color() (added in
-  // render) gives each sound its own lane.
+  // Strudel's full-screen fallback canvas). The remix floor uses it as is.
   function rollTail(ctxRef) {
     return '.pianoroll({ ctx: ' + ctxRef + ', cycles: 4, playhead: 0.5, labels: 0 })';
   }
-  function withRoll(code) {       // the live deck's floor
-    return SDJ._rollCtx ? code + rollTail('window.SDJ._rollCtx') : code;
+
+  // ---- the track rows: every part's notes on its own row -----------------
+  // The Live deck draws like a DAW's track list: one row per part, lined up
+  // with the part names. Strudel's Pattern.draw(cb, { id, lookbehind,
+  // lookahead }) hands drawLanes the notes around the playhead each frame; a
+  // note's .color() (set per lane in render) says which row it sits on. Same
+  // rule as the pianoroll: appended to the audio string only.
+  const ROLL_CYCLES = 4, ROLL_HEAD = 0.5; // 4 bars across, playhead in the middle
+  const PITCH_COLOUR = '#ff9b2f';         // the suggestion, lit on its row while With plays
+  function withRoll(code) {       // the live deck's track rows
+    if (!SDJ._rollCtx) return code;
+    return code + '.draw(window.SDJ._drawLanes, { id: 1, lookbehind: ' + ROLL_CYCLES * ROLL_HEAD +
+      ', lookahead: ' + ROLL_CYCLES * (1 - ROLL_HEAD) + ' })';
+  }
+  const NOTE_STEP = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
+  let laneLo = [], laneHi = []; // each row's pitch range so far this track
+  function midiOf(v) {
+    if (typeof v === 'number') return v;
+    const m = /^([a-g])([#bs]*)(-?\d+)?$/i.exec(String(v == null ? '' : v));
+    if (!m) return null;
+    let x = NOTE_STEP[m[1].toLowerCase()] + 12 * ((m[3] == null ? 3 : +m[3]) + 1);
+    for (const ch of m[2]) x += ch === 'b' ? -1 : 1;
+    return x;
+  }
+  function laneOfHap(h) {
+    const c = h.value && h.value.color;
+    if (!c) return -1;
+    if (c === SDJ.FILL_COLOR) return 3; // the snare build rides the clap row
+    return (SDJ.LANE_COLORS || []).indexOf(c);
+  }
+  function drawLanes(haps, time) {
+    const ctx = SDJ._rollCtx, cv = el.roll;
+    if (!ctx || !cv || !cv.width) return;
+    try {
+      const W = cv.width, H = cv.height, rows = LANE_COUNT, rowH = H / rows;
+      const from = time - ROLL_CYCLES * ROLL_HEAD;
+      const xOf = (t) => ((t - from) / ROLL_CYCLES) * W;
+      const pitchRow = pitchLayer === SDJ.FILL_IDX ? 3 : pitchLayer; // the fill rides the clap row
+      const lit = abMix >= 0.5 && pitchRow >= 0 ? pitchRow : -1;
+      ctx.clearRect(0, 0, W, H);
+      // row bands + bar lines, so the rows read as tracks even when quiet
+      for (let r = 0; r < rows; r++) {
+        ctx.fillStyle = r === pitchRow ? 'rgba(255,155,47,0.07)' : r % 2 ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0)';
+        ctx.fillRect(0, r * rowH, W, rowH);
+        ctx.fillStyle = 'rgba(255,255,255,0.06)';
+        ctx.fillRect(0, Math.round(r * rowH), W, 1);
+      }
+      for (let b = Math.ceil(from); b < from + ROLL_CYCLES; b++) ctx.fillRect(Math.round(xOf(b)), 0, 1, H);
+      // per-row pitch range, so a melody fills its row and a drum sits mid-row;
+      // it only widens (until the roll is cleared) so notes don't jump as they scroll
+      const lo = laneLo, hi = laneHi, byLane = [];
+      haps.forEach((h) => {
+        if (!h.whole) return;
+        const lane = laneOfHap(h);
+        if (lane < 0 || lane >= rows) return;
+        const p = midiOf(h.value.note != null ? h.value.note : h.value.n);
+        (byLane[lane] = byLane[lane] || []).push([h, p]);
+        if (p != null) { lo[lane] = Math.min(lo[lane] == null ? p : lo[lane], p); hi[lane] = Math.max(hi[lane] == null ? p : hi[lane], p); }
+      });
+      const pad = Math.max(2, rowH * 0.14);
+      byLane.forEach((list, lane) => {
+        if (!list) return;
+        const span = hi[lane] != null ? hi[lane] - lo[lane] : 0;
+        const noteH = span ? Math.max(2, (rowH - 2 * pad) / (span + 1)) : Math.max(3, rowH * 0.42);
+        const colour = lane === lit ? PITCH_COLOUR : (SDJ.LANE_COLORS || [])[lane];
+        list.forEach(([h, p]) => {
+          const x0 = xOf(h.whole.begin), x1 = xOf(h.whole.end);
+          const y = span && p != null
+            ? lane * rowH + pad + (hi[lane] - p) * ((rowH - 2 * pad - noteH) / span)
+            : lane * rowH + (rowH - noteH) / 2;
+          const on = h.whole.begin <= time && time < h.whole.end;
+          ctx.globalAlpha = on ? 1 : h.whole.end <= time ? 0.45 : 0.8;
+          ctx.fillStyle = h.value.color === SDJ.FILL_COLOR && lane !== lit ? SDJ.FILL_COLOR : colour;
+          ctx.fillRect(x0 + 1, y, Math.max(2, x1 - x0 - 2), noteH);
+        });
+      });
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = 'rgba(255,255,255,0.55)';
+      ctx.fillRect(Math.round(W * ROLL_HEAD), 0, 1, H);
+    } catch (e) { /* a bad frame must never stop the music */ }
+  }
+
+  // ---- the Steer column's tabs: live code / set history -----------------
+  const SIDE_TAB_KEY = 'sdj.sideTab';
+  function showSideTab(which) {
+    const hist = which === 'hist';
+    if (el.codePanel) el.codePanel.hidden = hist;
+    if (el.histPanel) el.histPanel.hidden = !hist;
+    [[el.tabCode, !hist], [el.tabHist, hist]].forEach(([b, on]) => {
+      if (!b) return;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    try { localStorage.setItem(SIDE_TAB_KEY, which); } catch (e) { /* storage blocked: fine */ }
   }
 
   // Keep a canvas' backing store matched to its box (× dpr) so the roll is crisp.
@@ -787,6 +916,7 @@
   }
 
   function clearRoll() {
+    laneLo = []; laneHi = [];
     if (SDJ._rollCtx && el.roll) SDJ._rollCtx.clearRect(0, 0, el.roll.width, el.roll.height);
   }
   function clearRemixRoll() {
@@ -2484,7 +2614,7 @@
     return true;
   }
 
-  // The part chips at the top of the rig are the per-part steer: a click
+  // The part names heading the track rows are the per-part steer: a click
   // cycles DJ decides → feature → drop (the kick is the floor: it only
   // toggles feature). Same opinions the old seven-row mixer set.
   const OPINION_WORDS = { '-1': 'drop it', '0': 'DJ decides', '1': 'featured' };
@@ -2620,6 +2750,9 @@
         let dropped = false;
         if (s.pending && s.pending.snapshot && s.pending.snapshot.active[i]) { s.pending.snapshot.active[i] = false; dropped = true; }
         if (s.genome.active[i]) { s.genome.active[i] = false; dropped = true; }
+        // a part taken out loses its blend: it comes back as one version
+        if (s.genome.alt) s.genome.alt[i] = null;
+        if (s.pending && s.pending.snapshot && s.pending.snapshot.alt) s.pending.snapshot.alt[i] = null;
         acted.notes.ban[i] = dropped ? 'dropped' : 'kept out';
         acted.changed = true;
         SDJ.setOpinion(i, -1); set[i] = true; // the mixer shows the call
@@ -2813,6 +2946,7 @@
         c.type = 'button';
         c.className = 'chip';
         c.textContent = k;
+        if (SDJ.LANE_COLORS && SDJ.LANE_COLORS[i]) c.style.setProperty('--lane', SDJ.LANE_COLORS[i]);
         c.addEventListener('click', () => cycleOpinion(i));
         el.stageChips.appendChild(c);
       });
@@ -3100,6 +3234,7 @@
     approve: function () { return liveDecide(true); },
     skip: function () { return liveDecide(false); },
     retake: liveRetake,       // another take of the same idea
+    blend: liveBlend,         // keep the change and the old version, taking turns
     undo: liveUndo,           // take back the last keep
     restore: restoreTo,       // (i) back to just after keep #i; -1 = before any
     auto: function (on) { return on === undefined ? autoRun : setAuto(on); }, // "Let it run"

@@ -49,70 +49,93 @@
 
   <!-- ══ LIVE: two turntables + a console — the track is a record being cut ══ -->
   <main class="view view-live stage" data-view="live" id="live" hidden>
-    <!-- ── THE RIG: Deck A (the track so far) · switch · Deck B (the pitch) ── -->
-    <section class="rig panel">
-      <div class="rig-head">
-        <div class="rig-title">
-          <h2 id="trackName">—</h2>
-          <p id="trackMeta" class="track-meta">press start to begin</p>
-        </div>
-        <div class="deck-buttons">
-          <button id="startBtn" class="btn primary">Start the set</button>
-          <button id="saveBtn" class="btn save-any" title="Save the track as it stands right now to your crate. Works any time; it doesn't have to be finished. (S)" disabled><span aria-hidden="true">◉</span> Save track <kbd>S</kbd></button>
-          <button id="undoBtn" class="btn ghost" title="Take back the last change you kept (Z or Ctrl+Z)" disabled><span aria-hidden="true">↶</span> Undo <kbd>Z</kbd></button>
-          <button id="autoBtn" class="btn ghost auto-btn" aria-pressed="false" title="Let it run: the DJ keeps each change after 8 bars unless you step in (L)"><span aria-hidden="true">⟳</span> Let it run <kbd>L</kbd></button>
-          <button id="skipBtn" class="btn ghost" title="Start a fresh track">New track</button>
+    <!-- Laid out like a DAW: transport bar on top, one row per part (GarageBand's
+         track list), the decision panel underneath, Steer + history/code beside. -->
+
+    <!-- ── TRANSPORT: the track's readout and the set controls ─────────────── -->
+    <header class="rig transport-bar panel">
+      <div class="lcd rig-title">
+        <h2 id="trackName">—</h2>
+        <p id="trackMeta" class="track-meta">press start to begin</p>
+      </div>
+      <div class="deck-buttons">
+        <button id="startBtn" class="btn primary">Start the set</button>
+        <button id="saveBtn" class="btn save-any" title="Save the track as it stands right now to your crate. Works any time; it doesn't have to be finished. (S)" disabled><span aria-hidden="true">◉</span> Save track <kbd>S</kbd></button>
+        <button id="undoBtn" class="btn ghost" title="Take back the last change you kept (Z or Ctrl+Z)" disabled><span aria-hidden="true">↶</span> Undo <kbd>Z</kbd></button>
+        <button id="autoBtn" class="btn ghost auto-btn" aria-pressed="false" title="Let it run: the DJ keeps each change after 8 bars unless you step in (L)"><span aria-hidden="true">⟳</span> Let it run <kbd>L</kbd></button>
+        <button id="skipBtn" class="btn ghost" title="Start a fresh track">New track</button>
+      </div>
+    </header>
+
+    <!-- ── TRACKS: one row per part — its name (click to steer) and its notes ── -->
+    <section class="tracks panel" aria-label="the parts of the track">
+      <div class="tracks-head">
+        <h3>Tracks</h3>
+        <span class="tracks-hint">Click a part: DJ decides → <b>★ feature</b> → <b>✕ drop</b>. <span class="amber">Amber</span> is the DJ's suggestion.</span>
+      </div>
+      <div class="tracks-body">
+        <div id="stageChips" class="chips track-heads" aria-label="arrangement layers"></div>
+        <div class="floor-viz lanes">
+          <canvas id="roll" aria-label="the track rows — each part's notes scroll past as they play"></canvas>
+          <div class="tracks-idle"><p>Press <b>Start the set</b>. The DJ starts with a kick and suggests one change at a time.</p></div>
         </div>
       </div>
+    </section>
 
-      <div id="stageChips" class="chips" aria-label="arrangement layers"></div>
-
-      <div id="sgEmpty" class="sg-empty">Press Start. The DJ suggests one change at a time on
-        Deck&nbsp;B. Click <b>Without</b> / <b>With</b> to hear the track both ways, then
-        <b>Keep</b> or <b>Bin</b> the change. Hit <b>◉ Save track</b> whenever you like.
-        Click a part above to feature or drop it.</div>
+    <!-- ── DECIDE: the two records, listen both ways, then keep or bin ──────── -->
+    <section class="decide panel">
+      <div id="sgEmpty" class="sg-empty">Press Start. The DJ suggests one change at a time.
+        Click <b>Without</b> / <b>With</b> to hear the track both ways, then <b>Keep</b> or
+        <b>Bin</b> the change. Hit <b>◉ Save track</b> whenever you like.</div>
 
       <div id="deckRig" class="deck-rig" hidden>
-        <div class="tdeck tdeck-a">
-          <div class="tdeck-tag"><span class="deck-tag">Deck A</span> the track so far</div>
-          <div id="deckAPlatter" class="platter2"><div id="deckADisc" class="disc"></div></div>
-          <div id="deckACap" class="tdeck-cap">—</div>
+        <div class="decks-mini">
+          <div class="tdeck tdeck-a">
+            <div id="deckAPlatter" class="platter2"><div id="deckADisc" class="disc"></div></div>
+            <div class="tdeck-tag"><span class="deck-tag">A</span> your track</div>
+            <div id="deckACap" class="tdeck-cap">—</div>
+          </div>
+          <div class="tdeck tdeck-b">
+            <div id="deckBPlatter" class="platter2"><div id="deckBDisc" class="disc"></div></div>
+            <div class="tdeck-tag"><span class="deck-tag">B</span> suggestion</div>
+          </div>
         </div>
 
-        <div id="abWrap" class="xfade abpick" role="group" aria-label="compare: hear the track without or with the suggested change">
-          <div class="abpick-title">Listen &amp; compare</div>
-          <button id="abTrack" type="button" class="abpick-btn a" aria-pressed="false">
-            <span class="abpick-play" aria-hidden="true">▶</span>
-            <span class="abpick-text"><b>Without</b> the change<small>Deck A · your track</small></span>
-          </button>
-          <button id="abChange" type="button" class="abpick-btn b" aria-pressed="true">
-            <span class="abpick-play" aria-hidden="true">▶</span>
-            <span class="abpick-text"><b>With</b> the change<small>Deck B · the suggestion</small></span>
-          </button>
-          <div class="abpick-hint">Click either one<span class="key-hint">, or press <kbd>Space</kbd>,</span> to switch. The lit one is playing. Both play at the same loudness.</div>
-        </div>
-
-        <div class="tdeck tdeck-b">
-          <div class="tdeck-tag"><span class="deck-tag">Deck B</span> the DJ's suggestion</div>
-          <div id="deckBPlatter" class="platter2"><div id="deckBDisc" class="disc"></div></div>
+        <div class="decide-main">
           <div id="sgCard" class="sg-card" hidden>
-            <div class="sg-kind" id="sgKind">new part</div>
-            <div class="sg-desc" id="sgDesc">—</div>
-            <div class="sg-ask" id="sgAsk">Keep this change?</div>
+            <span class="sg-kind" id="sgKind">new part</span>
+            <span class="sg-desc" id="sgDesc">—</span>
+            <span class="sg-ask" id="sgAsk">Keep this change?</span>
           </div>
-          <div id="sgActions" class="sg-actions" hidden>
-            <button id="sgSkip" class="btn vote-down">✗ Bin the change <kbd>X</kbd></button>
-            <button id="sgApprove" class="btn vote-up">✓ Keep the change <kbd>K</kbd></button>
-            <button id="sgRetake" class="btn sg-retake" title="Same idea, a different version. Nothing gets binned. (R)">↻ Another take <kbd>R</kbd></button>
+          <div class="decide-row">
+            <div id="abWrap" class="xfade abpick" role="group" aria-label="compare: hear the track without or with the suggested change">
+              <button id="abTrack" type="button" class="abpick-btn a" aria-pressed="false">
+                <span class="abpick-play" aria-hidden="true">▶</span>
+                <span class="abpick-text"><b>Without</b> the change</span>
+              </button>
+              <button id="abChange" type="button" class="abpick-btn b" aria-pressed="true">
+                <span class="abpick-play" aria-hidden="true">▶</span>
+                <span class="abpick-text"><b>With</b> the change</span>
+              </button>
+            </div>
+            <div id="sgActions" class="sg-actions" hidden>
+              <button id="sgSkip" class="btn vote-down">✗ Bin <kbd>X</kbd></button>
+              <button id="sgRetake" class="btn sg-retake" title="Same idea, a different version. Nothing gets binned. (R)">↻ Another take <kbd>R</kbd></button>
+              <button id="sgBlend" class="btn sg-blend" title="Keep both: the change and the part as it was take turns, a four-bar phrase each. (B)">⇄ Blend both <kbd>B</kbd></button>
+              <button id="sgApprove" class="btn vote-up">✓ Keep <kbd>K</kbd></button>
+            </div>
           </div>
+          <div class="abpick-hint">The lit one is playing<span class="key-hint">; <kbd>Space</kbd> switches</span>. Both play at the same loudness.</div>
           <div id="autoNote" class="auto-note" hidden aria-live="polite"></div>
           <div id="sgSaveHint" class="sg-save-hint" hidden>Happy with it as is? <b>◉ Save track</b> at the top saves it any time.</div>
         </div>
-      </div>
 
+        <!-- the mini visualiser: the shared scene system as a calm little tile -->
+        <div class="mini-viz"><canvas id="liveViz" aria-hidden="true"></canvas></div>
+      </div>
     </section>
 
-    <!-- ── STEER: one place to tell the DJ what you want, and the live code ── -->
+    <!-- ── STEER: tell the DJ what you want; the live code / set history below ── -->
     <aside class="console panel">
       <h3>Steer the DJ</h3>
 
@@ -124,7 +147,7 @@
                  aria-label="directions for the DJ" />
           <div id="curateChips" class="curate-chips" aria-live="polite"></div>
         </div>
-        <p class="steer-hint">Or click a part at the top of the deck: DJ decides → <b>feature</b> → <b>drop</b>.</p>
+        <p class="steer-hint">Or click a part's name in Tracks: DJ decides → <b>feature</b> → <b>drop</b>.</p>
       </div>
 
       <details class="ctrl-block steer-more">
@@ -140,39 +163,33 @@
         </div>
       </details>
 
+      <div class="side-tabs" role="tablist" aria-label="live code or set history">
+        <button id="tabCode" type="button" class="side-tab on" role="tab" aria-selected="true" aria-controls="codePanel">&lt;/&gt; Live code</button>
+        <button id="tabHist" type="button" class="side-tab" role="tab" aria-selected="false" aria-controls="histPanel">Set history</button>
+      </div>
+
       <!-- the live Strudel the DJ is running; while a change is up it shows the diff -->
-      <section class="codepanel">
+      <section id="codePanel" class="codepanel" role="tabpanel" aria-labelledby="tabCode">
         <div class="code-head">
-          <h3><span aria-hidden="true">&lt;/&gt;</span> The live code</h3>
+          <span class="code-note">A change shows as − / + lines</span>
           <button id="codeOpen" class="btn small ghost" title="Open your track (as kept so far) in the Strudel editor">↗ Open in Strudel</button>
         </div>
         <pre id="code" class="code" aria-label="live Strudel code">// the DJ hasn't started yet</pre>
       </section>
-    </aside>
 
-    <!-- ── FLOOR: the live pianoroll + a compact set history ─────────────── -->
-    <section class="floor panel">
-      <div class="floor-main">
-        <h3>The roll</h3>
-        <div class="floor-viz">
-          <canvas id="roll" aria-label="live pianoroll — the DJ's notes scroll past as they play"></canvas>
-        </div>
-      </div>
-      <aside class="floor-side">
+      <!-- set history: every kept change is a restore point -->
+      <section id="histPanel" class="history" role="tabpanel" aria-labelledby="tabHist" hidden>
         <div class="log-head">
-          <h3>Set history</h3>
+          <div class="feed-head">Kept · binned <small>↶ goes back</small></div>
           <div class="log-tools">
             <span id="logStat" class="log-stat" title="live set-log summary">—</span>
             <button id="logExport" class="btn small" title="Download the full set trace as JSON">Log</button>
             <button id="logClear" class="btn small ghost" title="Clear the captured trace">clear</button>
           </div>
         </div>
-        <div class="feed-head">Kept · binned <small>↶ goes back</small></div>
         <ul id="djFeed" class="feed"></ul>
-        <!-- the mini visualiser: the shared scene system as a calm little tile -->
-        <div class="mini-viz"><canvas id="liveViz" aria-hidden="true"></canvas></div>
-      </aside>
-    </section>
+      </section>
+    </aside>
 
   </main>
 

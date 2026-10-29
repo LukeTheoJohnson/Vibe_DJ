@@ -60,17 +60,20 @@ body[data-view="menu"] .view-menu { height: 100%; }
   text-align: right;
 }
 
-/* ── stage layout: rig (top) / floor (bottom) · steer + live code (right) ─ */
+/* ── stage layout, DAW-style: transport bar across the top · track rows ·
+   the decision panel under them · Steer + code / history down the right ─ */
 .stage {
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(270px, 0.8fr);
-  grid-template-rows: auto minmax(190px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(290px, 360px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas: "head head" "tracks side" "decide decide";
   gap: 16px; padding: 16px; align-items: stretch;
   height: calc(100% - var(--topbar-h));
 }
-.rig { grid-column: 1; grid-row: 1; }
-.console { grid-column: 2; grid-row: 1 / span 2; }
-.floor { grid-column: 1; grid-row: 2; }
+.rig { grid-area: head; }
+.tracks { grid-area: tracks; }
+.decide { grid-area: decide; }
+.console { grid-area: side; }
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -675,13 +678,7 @@ body.visuals-open { overflow: hidden; }
 /* ── responsive: stack on narrow screens ─────────────────────────────── */
 @media (max-width: 980px) {
   .stage { grid-template-columns: 1fr; grid-template-rows: none; height: auto; }
-  .rig, .console, .floor, .codepanel { grid-column: 1; grid-row: auto; }
   .code { flex: 0 0 auto; max-height: 300px; }
-  .deck-rig { grid-template-columns: 1fr; }
-  .xfade { width: min(320px, 90%); margin: 0 auto; }
-  .platter2 { width: min(190px, 60%); }
-  .floor { flex-direction: column; }
-  .floor-side { width: auto; flex: 0 0 auto; max-height: 260px; }
   .menu-hub { gap: 5vh; padding: 8vh 6vw 12vh; }
   .rx-rig { grid-template-columns: 1fr; }
   .rx-master { gap: 10px; }
@@ -926,6 +923,8 @@ kbd {
 /* another take: under the two verdicts, full width, quieter */
 .sg-actions .sg-retake { grid-column: 1 / -1; background: transparent; border: 1px solid var(--line); color: var(--ink); font-weight: 600; padding: 8px; }
 .sg-actions .sg-retake:disabled { opacity: .35; }
+.sg-actions .sg-blend { background: transparent; border: 1px solid var(--violet, #b23bff); color: var(--ink); font-weight: 600; padding: 8px; }
+.sg-actions .sg-blend:disabled { opacity: .35; border-color: var(--line); }
 .auto-note { font-size: 11.5px; color: var(--warm); text-align: center; font-variant-numeric: tabular-nums; }
 .auto-btn.on { border-color: var(--warm); color: var(--warm); background: rgba(255, 176, 60, 0.1); }
 
@@ -989,9 +988,158 @@ body[data-view="live"] button.chip:hover { color:var(--sr-bright); border-color:
 body[data-view="live"] .chip.feat { color:var(--sr-green); border-color:var(--sr-green); background:rgba(62,207,114,.1); }
 body[data-view="live"] .chip.drop { color:var(--sr-red); border-color:var(--sr-red); background:rgba(232,69,69,.08); }
 body[data-view="live"] .sg-actions .sg-retake { border:1px solid var(--sr-border-hi); background:var(--sr-surface); color:var(--sr-text); font-size:12px; padding:8px; }
+body[data-view="live"] .sg-actions .sg-blend { border:1px solid #9b6bff; background:rgba(155,107,255,.1); color:var(--sr-bright); font-size:12px; padding:8px; }
+body[data-view="live"] .sg-actions .sg-blend:hover:not(:disabled) { background:rgba(155,107,255,.22); }
+body[data-view="live"] .sg-actions .sg-blend:disabled { border-color:var(--sr-border); background:var(--sr-surface); color:var(--sr-label); }
 body[data-view="live"] .auto-btn.on { border-color:var(--sr-b); color:var(--sr-b); background:rgba(255,155,47,.1); }
 body[data-view="live"] .auto-note { color:var(--sr-b); }
 body[data-view="live"] .coach { border-color:var(--sr-a); border-radius:3px; }
 body[data-view="live"] .coach-target { outline-color:var(--sr-a); }
 body[data-view="live"] .console .codepanel h3 { border-bottom:none; margin:0; padding:0; }
 body[data-view="live"] .code-head { border-bottom:1px solid var(--sr-border); margin-bottom:8px; padding-bottom:6px; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE DAW LAYOUT (2026-10-29) — after GarageBand's track list: a transport bar,
+   one row per part (name + its notes), the decision panel underneath with the
+   two records small, and Steer with a Live code / Set history switch. */
+
+/* transport bar: the track readout on the left, the set controls on the right */
+.transport-bar { flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.lcd {
+  min-width: 220px; padding: 6px 14px; border-radius: 6px;
+  background: var(--surface-0, #0d0e11); border: 1px solid var(--line);
+}
+.lcd h2 { font-size: 15px; }
+.lcd .track-meta { margin-top: 2px; }
+
+/* the track rows: part names down the left, each lined up with its notes */
+.tracks { gap: 8px; }
+.tracks-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.tracks-head h3 { margin: 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; }
+.tracks-hint { font-size: 11px; color: var(--muted); }
+.tracks-hint .amber { color: #ff9b2f; font-weight: 700; }
+.tracks-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 6px; }
+.track-heads { display: grid; grid-template-rows: repeat(8, minmax(0, 1fr)); gap: 0; margin: 0; }
+.track-heads:empty { display: block; }
+body[data-view="live"] .track-heads .chip,
+.track-heads .chip {
+  display: flex; align-items: center; gap: 8px; margin: 0; min-height: 0;
+  border-radius: 0; border-width: 0 0 1px 0; text-align: left; justify-content: flex-start;
+}
+body[data-view="live"] .track-heads .chip::after,
+.track-heads .chip::after {
+  content: ''; order: -1; flex: 0 0 4px; align-self: stretch; margin: 3px 0;
+  border-radius: 2px; background: var(--lane, var(--muted)); opacity: .3;
+}
+.track-heads .chip.on::after { opacity: 1; }
+/* the row head keeps its plain colour bar while pitched: the amber row says it */
+body[data-view="live"] .track-heads .chip.pitching::after { position: static; inset: auto; box-shadow: none; animation: none; opacity: 1; }
+.lanes { position: relative; min-height: 0; }
+.lanes #roll { position: absolute; inset: 0; }
+.tracks-idle {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  padding: 16px; text-align: center; font-size: 13px; color: var(--muted); pointer-events: none;
+}
+.tracks:has(.track-heads .chip) .tracks-idle { display: none; }
+.tracks-body:has(.track-heads:empty) { grid-template-columns: minmax(0, 1fr); }
+
+/* the decision panel: records · the change and its buttons · the visualiser tile */
+.decide { gap: 0; }
+.decide .deck-rig { display: grid; grid-template-columns: auto minmax(0, 1fr) 150px; gap: 16px; align-items: center; margin: 0; }
+.decide .deck-rig[hidden] { display: none; }
+.decks-mini { display: flex; gap: 10px; }
+.decide .tdeck { flex-direction: column; align-items: center; gap: 4px; padding: 8px; }
+.decide .tdeck-tag { align-self: center; font-size: 10px; }
+.decide .platter2 { width: 96px; }
+.decide-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.decide .sg-card[hidden], .decide .sg-actions[hidden] { display: none; }
+.decide .sg-card { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; text-align: left; }
+.decide .sg-desc { margin: 0; font-size: 17px; }
+.decide .sg-ask { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); }
+.decide-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 12px; }
+.decide .abpick { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.decide .abpick-btn { padding: 8px 12px; }
+.decide .abpick-btn b { font-size: 14px; }
+.decide .abpick-text { display: block; }
+.decide .sg-actions { grid-template-columns: 1fr auto auto 1fr; gap: 6px; margin: 0; }
+.decide .sg-actions .sg-retake { grid-column: auto; }
+.decide .sg-actions .btn { white-space: nowrap; }
+.decide .abpick-hint, .decide .sg-save-hint, .decide .auto-note { text-align: left; }
+.decide .mini-viz { position: relative; height: 110px; margin: 0; }
+.decide .mini-viz canvas { position: absolute; inset: 0; }
+
+/* Steer: a Live code / Set history switch fills the rest of the column */
+.side-tabs { display: flex; gap: 4px; margin-top: 12px; border-bottom: 1px solid var(--line); }
+.side-tab {
+  font: inherit; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  padding: 7px 12px; cursor: pointer; background: transparent; color: var(--muted);
+  border: 1px solid transparent; border-bottom: none; border-radius: 4px 4px 0 0;
+}
+.side-tab:hover { color: var(--ink); }
+.side-tab.on { color: var(--ink); border-color: var(--line); background: var(--surface-1); }
+.side-tab:focus-visible { outline: 2px solid var(--cool); outline-offset: -2px; }
+.console .codepanel, .console .history { flex: 1 1 auto; min-height: 180px; margin-top: 8px; display: flex; flex-direction: column; }
+.console .codepanel[hidden], .console .history[hidden] { display: none; }
+.code-note { font-size: 10.5px; color: var(--muted); }
+.history .feed { flex: 1 1 auto; }
+
+/* Live (workstation) skin for the new pieces */
+body[data-view="live"] .lcd { background: var(--surface-0); border-color: var(--sr-border); border-radius: 3px; }
+body[data-view="live"] .tracks-hint { color: var(--sr-label); }
+body[data-view="live"] .track-heads .chip {
+  font-size: 11px; padding: 0 8px; background: var(--sr-surface);
+  border-color: var(--sr-border); border-style: solid; color: var(--sr-muted);
+  border-width: 0 0 1px 0; border-radius: 0;
+}
+body[data-view="live"] .tracks-head h3 { font-size: 9px; font-weight: 700; letter-spacing: .12em; color: var(--sr-label); }
+body[data-view="live"] .track-heads .chip.on { color: var(--sr-bright); background: var(--sr-raised); border-color: var(--sr-border); }
+body[data-view="live"] .track-heads .chip.pitching { color: var(--sr-b); background: rgba(255,155,47,.1); border-color: var(--sr-border); }
+body[data-view="live"] .track-heads .chip.feat { color: var(--sr-green); border-color: var(--sr-border); }
+body[data-view="live"] .track-heads .chip.drop { color: var(--sr-red); border-color: var(--sr-border); }
+body[data-view="live"] .decide .tdeck { padding: 6px; }
+body[data-view="live"] .decide .sg-actions .btn { min-height: 44px; font-size: 13px; padding: 10px 14px; }
+body[data-view="live"] .decide .sg-actions .sg-retake,
+body[data-view="live"] .decide .sg-actions .sg-blend { font-size: 11px; padding: 8px 12px; }
+body[data-view="live"] .decide .sg-desc { font-size: 17px; }
+body[data-view="live"] .side-tabs { border-bottom-color: var(--sr-border); }
+body[data-view="live"] .side-tab { font-size: 9px; letter-spacing: .12em; color: var(--sr-label); border-radius: 2px 2px 0 0; }
+body[data-view="live"] .side-tab.on { color: var(--sr-bright); background: var(--sr-raised); border-color: var(--sr-border); }
+body[data-view="live"] .code-head { border-bottom: none; margin-bottom: 6px; padding-bottom: 0; }
+
+/* the visualiser tile only where the buttons have room to spare */
+@media (max-width: 1380px) {
+  .decide .deck-rig { grid-template-columns: auto minmax(0, 1fr); }
+  .decide .mini-viz { display: none; }
+}
+/* medium widths: the listen pair and the verdicts stack */
+@media (max-width: 1100px) {
+  .decide-row { grid-template-columns: 1fr; }
+  .decide .sg-actions { grid-template-columns: 1fr 1fr; }
+  .decide .sg-actions .sg-retake, .decide .sg-actions .sg-blend { order: 3; }
+  .decide .deck-rig { grid-template-columns: auto minmax(0, 1fr); }
+  .decide .mini-viz { display: none; }
+}
+/* narrow / short screens: one column, the page scrolls, the decision panel
+   sticks to the bottom of the screen so Keep / Bin are always in reach */
+@media (max-width: 980px), (max-height: 640px) {
+  .stage { display: flex; flex-direction: column; height: auto; }
+  .tracks-body { height: 248px; flex: 0 0 auto; }
+  .decide { position: sticky; bottom: 0; z-index: 20; box-shadow: 0 -10px 24px rgba(0, 0, 0, 0.5); }
+  .console .codepanel, .console .history { flex: 0 0 auto; }
+  .history .feed { max-height: 260px; }
+}
+@media (max-width: 560px) {
+  .tracks-body { grid-template-columns: 86px minmax(0, 1fr); }
+  .tracks-hint { display: none; }
+  /* phones: the two records shrink to sit beside the suggestion, buttons below */
+  .decide .deck-rig { grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; }
+  .decide-main { display: contents; }
+  .decks-mini { grid-row: 1; gap: 6px; }
+  body[data-view="live"] .decide .tdeck { padding: 0; border: none; background: none; }
+  body[data-view="live"] .decide .platter2 { width: 46px; padding: 3px; }
+  .decide .tdeck-tag, .decide .tdeck-cap { display: none; }
+  .decide .sg-card { grid-column: 2; grid-row: 1; }
+  .decide-row, .decide .abpick-hint, .decide .auto-note, .decide .sg-save-hint { grid-column: 1 / -1; }
+  .decide .sg-desc { font-size: 15px; }
+  .transport-bar .lcd { flex: 1 1 100%; }
+}

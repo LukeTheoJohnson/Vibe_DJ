@@ -169,7 +169,7 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
     pressed.code.includes('stack(') && !pressed.code.includes('arrange('));
 
   // guitar-hero pianoroll: attached to the live audio, kept out of the code panel
-  check('live audio carries the pianoroll', evalCalls.some((c) => c.includes('.pianoroll(')));
+  check('live audio carries the track-row draw hook', evalCalls.some((c) => c.includes('.draw(window.SDJ._drawLanes')));
   check('code panel omits the pianoroll', !doc.getElementById('code').innerHTML.includes('pianoroll'));
 
   // ---- genre pills: pin the style for new tracks (empty = surprise me) ----
@@ -487,14 +487,18 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
   const killed = p1.layer;
   ve.rejectChange();
   check('killed add is reverted', ve.song.genome.active[killed] === false || p1.kind === 'reshape');
-  let recurred = false;
+  // a binned add is held back for a few pitches, then may come back as
+  // another version (a bin is a no to that version, not to the part)
+  let recurredAt = -1;
   for (let k = 0; k < 40; k++) {
     const pk = ve.proposeChange();
     if (!pk) break;
-    if (pk.kind === 'add' && pk.layer === killed) { recurred = true; break; }
+    if (pk.kind === 'add' && pk.layer === killed) { recurredAt = k; break; }
     ve.acceptChange();
   }
-  check('killed idea is never pitched again', !recurred);
+  check('a binned add is held back, not banned for the song',
+    p1.kind !== 'add' || (recurredAt === -1 || recurredAt >= 2) && !ve.song.banned['add:' + killed],
+    'came back at pitch ' + recurredAt);
   check('accepted changes build the track', window.SDJ.STAGES && ve.state().activeCount >= 2,
     'active=' + ve.state().activeCount);
   // cover art is a deterministic SVG for the change
@@ -1036,6 +1040,80 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
   const vg = { active: [true, false, false, false, false, false, false, true], variant: [0, 0, 0, 0, 0, 0, 0, 2], fx: [0, 0, 0, 0, 0, 0, 0, 0], double: [false, false, false, false, false, false, false, false], fill: 0 };
   check('the record wears a vocal ring in the vocal colour',
     window.SDJ.Vinyl.forLive({ seed: 5, name: 'Vox', key: 'C', bpm: 120 }, vg).includes(window.SDJ.LANE_COLORS[7]));
+
+  // ---- blend: keep the change and the old version, taking turns ----------
+  const blendEng = new window.SDJ.DJEngine();
+  blendEng.masterSeed = 7; blendEng.newSong(); blendEng.voteReset();
+  blendEng.song.genome.active = blendEng.song.genome.active.map(() => true);
+  let bp = null;
+  for (let k = 0; k < 80; k++) {
+    bp = blendEng.proposeChange();
+    if (bp && bp.kind === 'reshape' && bp.layer === window.SDJ.VOCAL_IDX) break;
+    blendEng.rejectChange(); bp = null;
+  }
+  check('a vocal rework can be blended', !!bp && blendEng.canBlend());
+  const beforeBlend = blendEng.renderCommitted();
+  const bRes = blendEng.blendChange();
+  const blended = blendEng.render();
+  const vocalsNow = window.SDJ.Lyrics.namesIn(blended);
+  check('a blended vocal plays both lines, taking turns a phrase each',
+    !!bRes && bRes.blend === true && blended.includes('.mask("<1 1 1 1 0 0 0 0>")') && blended.includes('.mask("<0 0 0 0 1 1 1 1>")') && vocalsNow.length === 2,
+    vocalsNow.join(' / '));
+  check('a blended render stays balanced',
+    [...blended].reduce((d, c) => d + (c === '(' ? 1 : c === ')' ? -1 : 0), 0) === 0);
+  check('a blend is one body line on its lane',
+    blendEng._lastLayers.filter((l) => l === window.SDJ.VOCAL_IDX).length === 1);
+  check('a blend is a restore point: undo takes it back',
+    !!blendEng.undoKeep() && blendEng.render() === beforeBlend);
+  // adds, drops and fills have one version: nothing to blend
+  const blendEng2 = new window.SDJ.DJEngine();
+  blendEng2.masterSeed = 11; blendEng2.newSong(); blendEng2.voteReset();
+  const addPitch = blendEng2.proposeChange();
+  check('an add can’t blendEng blended (only one version)', addPitch.kind === 'add' && !blendEng2.canBlend() && blendEng2.blendChange() === null);
+  // share links carry the blend; a hostile one is refused
+  const blendEng3 = new window.SDJ.DJEngine();
+  blendEng3.masterSeed = 7; blendEng3.newSong(); blendEng3.voteReset();
+  blendEng3.song.genome.active = blendEng3.song.genome.active.map(() => true);
+  blendEng3.song.genome.alt[2] = { variant: 4, fx: 1, double: false };
+  const bParams = window.SDJ.DJEngine.songParams(blendEng3.song, blendEng3.song.genome);
+  const blendEng4 = new window.SDJ.DJEngine();
+  check('a share link round-trips a blend', !!blendEng4.loadSong(JSON.parse(JSON.stringify(bParams))) && blendEng4.render() === blendEng3.render());
+  const badAlt = JSON.parse(JSON.stringify(bParams));
+  badAlt.genome.alt[2] = { variant: 'x")+alert(1)//', fx: 1, double: false };
+  check('a hostile blend in a share link is refused', blendEng4.loadSong(badAlt) === null);
+  // a rework of a blended lane leaves one version; an effect goes on both
+  const blendEng5 = new window.SDJ.DJEngine();
+  blendEng5.masterSeed = 7; blendEng5.newSong(); blendEng5.voteReset();
+  blendEng5.song.genome.active = blendEng5.song.genome.active.map(() => true);
+  blendEng5.song.genome.alt[5] = { variant: 9, fx: 0, double: false };
+  let p5 = null;
+  for (let k = 0; k < 120; k++) {
+    p5 = blendEng5.proposeChange();
+    if (p5 && p5.layer === 5 && (p5.kind === 'reshape' || p5.kind === 'fx')) break;
+    blendEng5.rejectChange(); p5 = null;
+  }
+  check('a change to a blended part: a rework starts it over, an effect lands on both',
+    !!p5 && (p5.kind === 'reshape' ? blendEng5.song.genome.alt[5] === null : (blendEng5.song.genome.alt[5].fx & blendEng5.song.genome.fx[5]) === blendEng5.song.genome.fx[5]),
+    p5 ? p5.kind : 'no pitch on lane 5');
+  // the app: the Blend button keeps both and logs it
+  if (!window.SDJ.live.pitching()) { await window.SDJ.live.start(); await sleep(20); }
+  let blendedLive = false, sawGreyed = false;
+  for (let k = 0; k < 60 && !blendedLive; k++) {
+    if (window.SDJ.live.pitching() === true && window.SDJ.engine.canBlend()) {
+      const liveBtn = !doc.getElementById('sgBlend').disabled;
+      blendedLive = window.SDJ.live.blend() && liveBtn;
+    } else if (window.SDJ.live.pitching() === true) {
+      // an add / drop / fill: the button is there but greyed out
+      if (!doc.getElementById('sgBlend').hidden && doc.getElementById('sgBlend').disabled) sawGreyed = true;
+      window.SDJ.live.approve();
+    } else {
+      window.SDJ.live.approve();
+    }
+    await sleep(8);
+  }
+  check('the Blend button is greyed out when a change has one version', sawGreyed);
+  check('Blend from the deck keeps both versions', blendedLive &&
+    window.SDJ.engine.song.genome.alt.some(Boolean) && doc.getElementById('djFeed').textContent.includes('blended'));
 
   // ---- lane-index coupling: lane words span exactly SDJ.STAGES (T-12) -----
   // LANE_NAMES isn't exported, so infer the highest lane index the parser can

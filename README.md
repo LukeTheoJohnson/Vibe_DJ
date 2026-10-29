@@ -30,10 +30,11 @@ The bit that matters: **Without / With** between the decks switches
 `engine.renderAB(mix)` — one balanced Strudel program that carries *both* versions of
 every lane the change touches. Both sides play at the **same loudness** (an added part is
 trimmed to match, so "louder" can't win the comparison). **✓ Keep** presses the change
-onto the record, **✗ Bin** throws it out, and **↻ Another take** tries a different
-version of the same idea. Every keep is a restore point: **↶ Undo**, or go back to any
+onto the record, **✗ Bin** throws it out, **↻ Another take** tries a different
+version of the same idea, and **⇄ Blend both** keeps the change *and* the part as it was,
+taking turns a four-bar phrase each (two vocal lines alternate, an effect comes and goes). Every keep is a restore point: **↶ Undo**, or go back to any
 row in the set history. **⟳ Let it run** keeps each change after 8 bars if you'd rather
-just listen. The whole loop runs from the keyboard (Space · K · X · R · S · Z · L).
+just listen. The whole loop runs from the keyboard (Space · K · X · R · B · S · Z · L).
 
 **Steer the DJ** on the right: type what you want ("no hi-hats, darker, slower"), click a
 part chip to feature or drop it, or open genre & density. Under that, the live code
