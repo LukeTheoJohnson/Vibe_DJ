@@ -394,6 +394,46 @@ async function until(condFn, timeoutMs = 500, stepMs = 5) {
     leadCells.size >= 12, 'distinct lead cells=' + leadCells.size);
   check('every lead-variant render stays balanced', leadBal);
 
+  // ---- variety across reworks: successive variants must change the part ----
+  // A rework/retake bumps a lane's variant. Each lane now ROTATES its pools by
+  // variant (no re-rolling a small pool onto the same groove), and the lead is
+  // composed from feel x contour x phrase form (Theory.melody). Guard, per
+  // genre on one seed: variants 0..15 give >=12 distinct lead lines with no
+  // two successive variants alike, and every other lane offers >=4 patterns.
+  const varietyFails = [];
+  let varietyBal = true;
+  for (const G of window.SDJ.Theory.GENRES) {
+    const ve2 = new window.SDJ.DJEngine();
+    ve2.masterSeed = 4242; ve2.genrePref = G.id; ve2.newSong();
+    ve2.song.genome.active = [true, true, true, true, true, true, true];
+    for (let lane = 0; lane < 7; lane++) {
+      const seen = new Set();
+      let prev = null, repeats = 0;
+      for (let v = 0; v < 16; v++) {
+        ve2.song.genome.variant[lane] = v;
+        const code = ve2.render();
+        if (!balanced(code)) varietyBal = false;
+        // the lane's musical content: its mini-notation strings (gain/filter
+        // numbers aren't variety), plus its voice for the sustained air lane
+        const lines = code.split('\n').filter((l) => l.includes('"' + window.SDJ.LANE_COLORS[lane] + '"'));
+        const id = lines.map((l) => (l.match(/(?:\bs|\bn|struct|sound)\("[^"]*"\)/g) || []).join('')).join('|');
+        seen.add(id);
+        if (prev === id) repeats++;
+        prev = id;
+      }
+      const need = lane === 5 ? 12 : 4;
+      if (seen.size < need || (lane === 5 && repeats > 0)) {
+        varietyFails.push(G.id + ' lane ' + lane + ': ' + seen.size + ' distinct, ' + repeats + ' repeats');
+      }
+    }
+  }
+  check('reworks reach a wide pool on every lane (lead >=12/16, no successive repeat)',
+    varietyFails.length === 0, varietyFails.join('; '));
+  check('every variety render stays balanced', varietyBal);
+  check('multi-word scales are colon-joined (a space splits as mini-notation)',
+    window.SDJ.Theory.scaleName('A', 2, 'harmonic minor') === 'A2:harmonic:minor' &&
+    window.SDJ.Theory.scaleName('C', 3, 'minor') === 'C3:minor');
+
   // expanded harmony + bass vocabulary
   check('voicings expand the harmonic vocabulary (quartal/shell/etc.)',
     window.SDJ.Theory.VOICINGS.length >= 6 &&

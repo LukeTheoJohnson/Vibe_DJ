@@ -721,6 +721,35 @@
     // that specific layer is reshaped; energy scales its intensity.
     const lrng = (i) =>
       Rng.make((s.seed ^ ((i + 1) * 0x9e3779b1) ^ (g.variant[i] * 0x85ebca77)) >>> 0);
+    // Variant-ROTATED pick: a song-seeded offset plus the lane's variant, so
+    // v, v+1, v+2 … walk the pool in order and a rework (variant +1..4) always
+    // lands on a different entry of any pool of five or more. A fresh Rng.pick
+    // per variant re-rolls a small pool and kept landing on the same few
+    // entries — the "3 or 4 similar patterns" a set of reworks cycled through.
+    // `salt` gives each dimension of a lane its own offset.
+    const turn = (i, salt, arr) => {
+      const r = Rng.make((s.seed ^ ((i + 1) * 0x2545f491) ^ ((salt + 1) * 0x27d4eb2f)) >>> 0);
+      return arr[(Math.floor(r() * arr.length) + g.variant[i]) % arr.length];
+    };
+    // A two-bar drum phrase: the bar, then the same bar with its last step
+    // turned around (a pickup, a double, a drop-out) — the drummer's fill.
+    const topSteps = (pat) => {
+      const out = []; let depth = 0, cur = '';
+      for (const c of pat) {
+        if (c === '[' || c === '<' || c === '(') depth++;
+        if (c === ']' || c === '>' || c === ')') depth--;
+        if (c === ' ' && depth === 0) { if (cur) out.push(cur); cur = ''; } else cur += c;
+      }
+      if (cur) out.push(cur);
+      return out;
+    };
+    const turnaround = (pat, rng, alts) => {
+      const st = topSteps(pat);
+      if (st.length < 4) return pat;
+      const opts = alts.filter((a) => a !== st[st.length - 1]);
+      st[st.length - 1] = Rng.pick(rng, opts);
+      return '<[' + pat + '] [' + st.join(' ') + ']>';
+    };
 
     const layers = [];
     const lineLayers = []; // stage index for each body line — the A&R code map
@@ -758,38 +787,44 @@
     if (on(0)) {
       const kr = lrng(0);
       // Pattern pools indexed by bucket (1..3). Euclidean notation gives organic feel.
+      // Every bucket holds five or more so the variant rotation (turn) never
+      // lands a rework back on the same groove.
       const trapKick = [
-        ['bd ~ ~ ~ ~ ~ ~ ~', 'bd ~ ~ ~ bd ~ ~ ~', 'bd(3,8)', 'bd ~ ~ bd ~ ~ ~ ~'],
-        ['bd ~ ~ ~ bd ~ bd ~', 'bd ~ bd ~ ~ ~ bd ~', 'bd ~ ~ bd ~ ~ bd ~', 'bd ~ ~ ~ bd ~ ~ bd'],
-        ['bd ~ bd bd ~ bd ~ bd', 'bd bd ~ bd ~ ~ bd ~', 'bd ~ bd ~ bd ~ bd bd', 'bd ~ bd ~ bd bd ~ bd'],
+        ['bd ~ ~ ~ ~ ~ ~ ~', 'bd ~ ~ ~ bd ~ ~ ~', 'bd(3,8)', 'bd ~ ~ bd ~ ~ ~ ~', 'bd ~ ~ ~ ~ ~ bd ~', 'bd ~ ~ ~ ~ bd ~ ~'],
+        ['bd ~ ~ ~ bd ~ bd ~', 'bd ~ bd ~ ~ ~ bd ~', 'bd ~ ~ bd ~ ~ bd ~', 'bd ~ ~ ~ bd ~ ~ bd',
+          'bd ~ ~ bd ~ bd ~ ~', 'bd ~ ~ ~ ~ ~ bd [~ bd]', 'bd ~ [~ bd] ~ ~ ~ bd ~'],
+        ['bd ~ bd bd ~ bd ~ bd', 'bd bd ~ bd ~ ~ bd ~', 'bd ~ bd ~ bd ~ bd bd', 'bd ~ bd ~ bd bd ~ bd',
+          'bd ~ ~ bd ~ ~ bd [bd bd]', '[bd bd] ~ ~ bd ~ bd ~ ~', 'bd ~ bd ~ ~ [bd bd] ~ bd'],
       ];
       const boomKick = [
-        ['bd ~ ~ ~ bd ~ ~ ~', 'bd ~ bd ~ ~ ~ ~ ~'],
-        ['bd ~ ~ bd ~ ~ bd ~', 'bd ~ bd ~ ~ bd ~ ~'],
-        ['bd ~ bd bd ~ ~ bd ~', 'bd bd ~ ~ bd ~ bd ~'],
+        ['bd ~ ~ ~ bd ~ ~ ~', 'bd ~ bd ~ ~ ~ ~ ~', 'bd ~ ~ ~ ~ ~ bd ~', 'bd ~ ~ bd ~ ~ ~ ~', 'bd ~ ~ ~ ~ bd ~ ~'],
+        ['bd ~ ~ bd ~ ~ bd ~', 'bd ~ bd ~ ~ bd ~ ~', 'bd ~ ~ [~ bd] ~ ~ bd ~', 'bd [~ bd] ~ ~ bd ~ ~ ~', 'bd ~ ~ ~ bd bd ~ ~'],
+        ['bd ~ bd bd ~ ~ bd ~', 'bd bd ~ ~ bd ~ bd ~', 'bd ~ bd ~ ~ bd bd ~', 'bd ~ [~ bd] bd ~ ~ bd ~', '[bd bd] ~ ~ bd ~ ~ bd ~'],
       ];
       // Beyond hip-hop: house pumps four-on-the-floor (with pickup variants),
       // rock drives 1-and-3 with pushes, metal bursts into double-kick 16ths,
       // synthwave holds a steady 80s machine pulse.
+      // House never leaves the four — its variety is in the pickups between.
       const houseKick = [
-        ['bd*4', 'bd ~ bd bd'],
-        ['bd*4', 'bd bd bd bd', 'bd bd bd [bd bd]'],
-        ['bd*4', 'bd bd bd [bd bd]', '[bd bd] bd bd bd'],
+        ['bd*4', 'bd ~ bd bd', 'bd bd bd [~ bd]', 'bd [~ ~ ~ bd] bd bd', 'bd bd ~ bd'],
+        ['bd*4', 'bd bd bd [bd bd]', 'bd bd bd [~ bd]', '[bd ~ ~ bd] bd bd bd', 'bd bd [bd ~ ~ bd] bd'],
+        ['bd*4', 'bd bd bd [bd bd]', '[bd bd] bd bd bd', 'bd [bd ~ ~ bd] bd [~ bd]', 'bd bd [~ bd] [bd bd]'],
       ];
       const rockKick = [
-        ['bd ~ ~ ~ bd ~ ~ ~', 'bd ~ ~ ~ bd ~ ~ bd'],
-        ['bd ~ ~ bd bd ~ ~ ~', 'bd ~ ~ ~ bd ~ bd ~'],
-        ['bd ~ ~ bd bd ~ bd ~', 'bd ~ bd bd bd ~ ~ bd'],
+        ['bd ~ ~ ~ bd ~ ~ ~', 'bd ~ ~ ~ bd ~ ~ bd', 'bd ~ bd ~ ~ ~ ~ ~', 'bd ~ ~ ~ ~ ~ bd ~', 'bd ~ ~ bd ~ ~ ~ ~'],
+        ['bd ~ ~ bd bd ~ ~ ~', 'bd ~ ~ ~ bd ~ bd ~', 'bd ~ bd ~ bd ~ ~ ~', 'bd ~ ~ bd ~ ~ bd ~', 'bd bd ~ ~ bd ~ ~ ~'],
+        ['bd ~ ~ bd bd ~ bd ~', 'bd ~ bd bd bd ~ ~ bd', 'bd bd ~ bd bd ~ ~ ~', 'bd ~ bd ~ bd bd ~ bd', 'bd ~ ~ bd bd bd ~ bd'],
       ];
       const metalKick = [
-        ['bd*4', 'bd ~ bd ~ bd ~ bd ~'],
-        ['bd bd ~ bd bd ~ bd ~', 'bd ~ [bd bd] ~ bd ~ [bd bd] ~'],
-        ['[bd bd] [bd bd] [bd bd] [bd bd]', 'bd*8', '[bd bd] bd [bd bd] bd [bd bd] bd [bd bd] bd'],
+        ['bd*4', 'bd ~ bd ~ bd ~ bd ~', 'bd ~ ~ bd bd ~ ~ ~', 'bd bd ~ ~ bd bd ~ ~', 'bd ~ bd bd ~ ~ bd ~'],
+        ['bd bd ~ bd bd ~ bd ~', 'bd ~ [bd bd] ~ bd ~ [bd bd] ~', 'bd*8', '[bd bd] bd ~ bd [bd bd] bd ~', 'bd bd bd ~ bd bd bd ~'],
+        ['[bd bd] [bd bd] [bd bd] [bd bd]', 'bd*16', '[bd bd] bd [bd bd] bd [bd bd] bd [bd bd] bd',
+          '[bd ~ bd bd] [bd ~ bd bd] [bd ~ bd bd] [bd ~ bd bd]', '[bd bd bd] bd [bd bd bd] bd'],
       ];
       const waveKick = [
-        ['bd ~ ~ ~ bd ~ ~ ~'],
-        ['bd ~ ~ ~ bd ~ ~ ~', 'bd ~ bd ~ bd ~ bd ~'],
-        ['bd ~ bd ~ bd ~ bd ~', 'bd ~ ~ bd bd ~ bd ~'],
+        ['bd ~ ~ ~ bd ~ ~ ~', 'bd ~ ~ ~ ~ ~ ~ ~', 'bd ~ ~ ~ bd ~ ~ bd', 'bd ~ ~ bd ~ ~ ~ ~', 'bd ~ ~ ~ ~ ~ bd ~'],
+        ['bd ~ ~ ~ bd ~ ~ ~', 'bd ~ bd ~ bd ~ bd ~', 'bd ~ ~ bd bd ~ ~ ~', 'bd ~ ~ ~ bd ~ bd ~', 'bd*4'],
+        ['bd ~ bd ~ bd ~ bd ~', 'bd ~ ~ bd bd ~ bd ~', 'bd*4', 'bd ~ bd bd bd ~ bd ~', 'bd ~ ~ bd bd ~ ~ bd'],
       ];
       const kickPool = (gid === 'boomBap' || gid === 'loFi') ? boomKick
         : gid === 'house' ? houseKick
@@ -798,7 +833,9 @@
         : gid === 'synthwave' ? waveKick
         : trapKick;
       const pool = kickPool[bucket - 1] || kickPool[1];
-      const pat = Rng.pick(kr, pool);
+      let pat = turn(0, 0, pool);
+      // half the time the second bar turns around into the next phrase
+      if (Rng.chance(kr, 0.45)) pat = turnaround(pat, kr, gid === 'house' ? ['[bd bd]', '[~ bd]', '[bd ~ bd bd]'] : ['[bd bd]', '[~ bd]', '~', 'bd']);
       let kick = 's("' + pat + '").gain(' + n2(0.88 + e * 0.09) + ')';
       if (bucket >= 3 && Rng.chance(kr, 0.4)) kick += '.shape(' + n2(0.1 + e * 0.18) + ')';
       put(0, kit(kick));
@@ -808,25 +845,44 @@
     // accents on off-beats. Boom bap and lo-fi stay sparser and breathier.
     if (on(1)) {
       const hr = lrng(1);
+      // Each pool is [calm, busy]: a calm set stays simple at low energy, the
+      // busy one adds rolls, triplet bursts and euclidean spreads. Five-plus
+      // entries apiece, so the variant rotation always changes the groove.
       const trapHats = [
-        'hh*8',
-        'hh*16',
-        'hh*12',
-        'hh(11,16)',
-        'hh(13,16)',
-        'hh ~ [hh hh] ~ hh ~ [hh hh hh] ~',
-        'hh ~ hh hh ~ hh ~ hh',
-        '[hh hh] ~ hh ~ [hh hh] ~ hh ~',
+        ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh*4', 'hh(5,8)', '~ hh ~ hh ~ hh ~ hh'],
+        ['hh*8', 'hh*16', 'hh*12', 'hh(11,16)', 'hh(13,16)',
+          'hh ~ [hh hh] ~ hh ~ [hh hh hh] ~', 'hh ~ hh hh ~ hh ~ hh', '[hh hh] ~ hh ~ [hh hh] ~ hh ~',
+          'hh hh hh [hh hh hh] hh hh hh [hh hh hh hh]', 'hh hh [hh hh hh] hh hh hh [hh hh hh hh] hh'],
       ];
-      const boomHats = ['hh*8', 'hh(9,16)', 'hh ~ hh hh ~ hh hh ~', 'hh ~ hh ~ hh ~ hh ~'];
-      const loFiHats = ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh hh ~ hh hh ~ hh ~'];
+      const boomHats = [
+        ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh hh ~ hh hh ~ hh ~', '~ hh ~ hh ~ hh ~ hh', 'hh ~ hh hh ~ hh ~ hh'],
+        ['hh*8', 'hh(9,16)', 'hh ~ hh hh ~ hh hh ~', 'hh ~ hh ~ hh ~ hh ~',
+          'hh [~ hh] hh [~ hh] hh [~ hh] hh [hh hh]', 'hh hh hh [~ hh] hh hh hh ~'],
+      ];
+      const loFiHats = [
+        ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh hh ~ hh hh ~ hh ~', '~ hh ~ hh ~ hh ~ hh', 'hh ~ ~ hh ~ ~ hh ~'],
+        ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh hh ~ hh hh ~ hh ~', 'hh(7,16)', 'hh ~ hh [~ hh] hh ~ hh ~', 'hh hh ~ hh ~ hh hh ~'],
+      ];
       // House rides the OFFBEAT open hat — that lift is the genre's signature.
       // Rock and metal drive straight 8ths (16ths once it heats up); synthwave
       // keeps a steady machine tick.
-      const houseHats = ['~ oh ~ oh', 'hh oh hh oh', '[hh hh] oh [hh hh] oh', '~ oh ~ [oh oh]', 'hh*8'];
-      const rockHats = ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh*16', '[hh hh] [hh hh] [hh hh] [hh hh]'];
-      const metalHats = ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh*16', 'hh(13,16)'];
-      const waveHats = ['hh*8', 'hh ~ hh ~ hh ~ hh ~'];
+      const houseHats = [
+        ['~ oh ~ oh', 'hh oh hh oh', '~ oh ~ [oh oh]', '[~ oh] [~ oh] [~ oh] [~ oh]', 'hh*8'],
+        ['[hh hh] oh [hh hh] oh', 'hh oh hh oh', '~ oh ~ oh', '[~ oh] [~ oh] [~ oh] [~ oh]',
+          'hh*16', '[hh hh hh] oh [hh hh hh] oh', '[hh ~ hh] oh [~ hh] oh'],
+      ];
+      const rockHats = [
+        ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh*4', '[hh hh] hh [hh hh] hh', 'hh hh hh [hh oh]'],
+        ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh*16', 'hh hh oh hh hh hh oh hh', 'hh [hh hh] hh [hh hh]', 'hh hh hh hh hh hh hh oh'],
+      ];
+      const metalHats = [
+        ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh*4', 'hh hh hh oh', 'hh(5,8)'],
+        ['hh*8', 'hh ~ hh ~ hh ~ hh ~', 'hh*16', 'hh(13,16)', 'hh hh hh hh hh hh oh ~', '[hh hh hh] [hh hh hh] [hh hh hh] [hh hh hh]'],
+      ];
+      const waveHats = [
+        ['hh*8', 'hh ~ hh ~ hh ~ hh ~', '~ hh ~ hh ~ hh ~ hh', 'hh*4', 'hh hh ~ hh hh hh ~ hh'],
+        ['hh*8', 'hh ~ hh ~ hh ~ hh ~', '~ hh ~ hh ~ hh ~ hh', 'hh*16', 'hh hh oh hh hh hh oh hh', '[hh hh] hh [hh hh] hh'],
+      ];
       let hatPool;
       if (gid === 'boomBap') hatPool = boomHats;
       else if (gid === 'loFi') hatPool = loFiHats;
@@ -836,12 +892,16 @@
       else if (gid === 'synthwave') hatPool = waveHats;
       else hatPool = trapHats;
       // low energy keeps it simple
-      const actualPool = bucket <= 1 ? hatPool.slice(0, 2) : hatPool;
-      const pat = Rng.pick(hr, actualPool);
+      const actualPool = bucket <= 1 ? hatPool[0] : hatPool[1];
+      let pat = turn(1, 0, actualPool);
+      // a hat roll into the next bar on the turnaround (trap/drill live on it)
+      if (bucket >= 2 && Rng.chance(hr, (gid === 'trap' || gid === 'drill') ? 0.5 : 0.25)) {
+        pat = turnaround(pat, hr, ['[hh hh hh]', '[hh hh hh hh]', '[hh hh]', 'oh']);
+      }
       put(1, kit(swing('s("' + pat + '").gain(' + n2(0.20 + e * 0.18) + ').pan(sine.range(0.35,0.65))')));
       // open hi-hat accent on off-beats (house already carries its own oh)
       if (bucket >= 2 && gid !== 'house' && Rng.chance(hr, 0.55)) {
-        const ohPat = Rng.pick(hr, ['~ oh ~ ~', '~ ~ oh ~', '~ oh ~ oh']);
+        const ohPat = Rng.pick(hr, ['~ oh ~ ~', '~ ~ oh ~', '~ oh ~ oh', '~ ~ ~ oh', '[~ oh] ~ ~ ~', '~ ~ [~ oh] ~']);
         put(1, kit(swing('s("' + ohPat + '").gain(' + n2(0.16 + e * 0.14) + ')')));
       }
     }
@@ -852,31 +912,36 @@
       const br = lrng(2);
       const isTrap = gid === 'trap' || gid === 'drill';
       const isRiff = gid === 'rock' || gid === 'metal';
+      // The note line: a bass FIGURE expanded chord by chord (roots, octave
+      // jumps, fifths, walk-ups into the next chord — Theory.BASS_FIGURES),
+      // rotated by variant. The figure carries its own rhythm, so it replaces
+      // the old root-only n("<…>") + .struct() pair; the voice chains below
+      // are unchanged. Low energy keeps to the sparser first half of a list.
+      const steps = Theory.stepsIn(scale);
+      const figFor = (list) => {
+        const pool = bucket <= 1 ? list.slice(0, Math.max(5, Math.ceil(list.length / 2))) : list;
+        return 'n("' + Theory.bassFigure(s.prog, turn(2, 0, pool), steps) + '").scale(' + scl(2) + ')';
+      };
       let bass;
       if (isRiff) {
         // Driven sawtooth riff — the guitar-adjacent low end rock and metal
         // ride on. Metal chugs relentless 8th/16th palm-mutes; rock leaves
         // gaps to push against. .shape() supplies the drive, and the low-pass
         // keeps it an amp cabinet rather than a razor.
-        const riffStructs = gid === 'metal'
-          ? ['x x x x x x x x', 'x x x x x x [x x] x', '[x x] x x x [x x] x x x']
-          : ['x ~ x x ~ x x ~', 'x x ~ x x ~ x x', 'x ~ x ~ x x ~ x'];
-        bass = 'n("' + rootSeq + '").scale(' + scl(2) + ').struct("' + Rng.pick(br, riffStructs) + '")' +
+        bass = figFor(Theory.BASS_FIGURES[gid === 'metal' ? 'metal' : 'rock']) +
           '.sound("sawtooth").shape(' + n2(0.3 + e * 0.2) + ')' +
           '.lpf(' + Math.round(400 + e * 500) + ').lpq(' + n2(2 + e * 4) + ')' +
           '.gain(' + n2(0.74 + e * 0.1) + ')';
       } else if (gid === 'house') {
         // Rolling offbeat bass — the pump between the four-on-the-floor kicks.
-        const offStructs = ['~ x ~ x ~ x ~ x', '~ x ~ x ~ x ~ [x x]', '~ x ~ [x x] ~ x ~ x'];
-        bass = 'n("' + rootSeq + '").scale(' + scl(2) + ').struct("' + Rng.pick(br, offStructs) + '")' +
+        bass = figFor(Theory.BASS_FIGURES.house) +
           '.sound("' + Rng.pick(br, ['square', 'sawtooth']) + '")' +
           '.decay(' + n2(0.18 + e * 0.1) + ').release(0.05)' +
           '.lpf(' + Math.round(300 + e * 700) + ').lpq(' + n2(3 + e * 5) + ')' +
           '.gain(' + n2(0.74 + e * 0.08) + ')';
       } else if (gid === 'synthwave') {
         // Plucky root 8ths — the sequenced anchor under the neon pads.
-        const plkStructs = ['x x x x x x x x', 'x ~ x x x ~ x x', 'x x x ~ x x x ~'];
-        bass = 'n("' + rootSeq + '").scale(' + scl(2) + ').struct("' + Rng.pick(br, plkStructs) + '")' +
+        bass = figFor(Theory.BASS_FIGURES.wave) +
           '.sound("' + Rng.pick(br, ['sawtooth', 'square']) + '")' +
           '.attack(0.005).decay(' + n2(0.12 + e * 0.08) + ').release(0.06)' +
           '.lpf(' + Math.round(500 + e * 900) + ')' +
@@ -884,20 +949,7 @@
       } else if (isTrap) {
         // 808 character: sine with light FM for upper harmonics, long release,
         // very low filter. Pattern is sparse — the 808 holds the note.
-        const structs808 = [
-          'x ~ ~ ~ ~ ~ ~ ~',
-          'x ~ ~ ~ x ~ ~ ~',
-          'x ~ ~ x ~ ~ ~ ~',
-          'x ~ x ~ ~ ~ x ~',
-          'x ~ ~ ~ ~ ~ x ~',
-          'x ~ ~ x ~ ~ x ~',
-          'x ~ x ~ x ~ ~ ~',
-          'x ~ ~ ~ x ~ x ~',
-          'x ~ x x ~ ~ ~ ~',
-        ];
-        const struct = Rng.pick(br, structs808);
-        bass = 'n("' + rootSeq + '").scale(' + scl(2) + ')' +
-          '.struct("' + struct + '")' +
+        bass = figFor(Theory.BASS_FIGURES.sub808) +
           '.sound("sine").fm(' + n2(0.3 + e * 1.0) + ').fmh(' + Rng.int(br, 1, 2) + ')' +
           '.attack(0.01).release(' + n2(0.8 + e * 1.0) + ')' +
           '.lpf(' + Math.round(160 + e * 220) + ').gain(' + n2(0.88 + e * 0.08) + ')';
@@ -910,21 +962,19 @@
         }
       } else {
         // Melodic bassline: saw/square/sine with rhythmic structure.
-        const light = ['x ~ ~ ~ x ~ ~ ~', 'x ~ ~ x x ~ ~ ~'];
-        const heavy = ['x ~ x ~ x ~ x x', 'x x ~ x x ~ x x', 'x ~ x ~ ~ ~ x ~'];
-        const struct = bucket <= 1 ? Rng.pick(br, light) : Rng.pick(br, heavy);
+        const line = figFor(Theory.BASS_FIGURES.melodic);
         const cut = Math.round(280 + e * 1900);
-        const voice = Rng.int(br, 0, 3);
+        const voice = turn(2, 1, [0, 1, 2, 3, 0, 2]);
         if (voice === 0) {
-          bass = 'n("' + rootSeq + '").scale(' + scl(2) + ').struct("' + struct + '")' +
+          bass = line +
             '.sound("sawtooth").lpf(' + cut + ').lpq(' + n2(4 + e * 8) + ')' +
             '.gain(' + n2(0.7 + e * 0.1) + ')';
         } else if (voice === 1) {
-          bass = 'n("' + rootSeq + '").scale(' + scl(2) + ').struct("' + struct + '")' +
+          bass = line +
             '.sound("square").lpf(' + cut + ').lpenv(' + n2(2 + e * 2) + ').lpattack(0.02)' +
             '.gain(' + n2(0.7 + e * 0.1) + ')';
         } else if (voice === 2) {
-          bass = 'n("' + rootSeq + '").scale(' + scl(2) + ').struct("' + struct + '")' +
+          bass = line +
             '.sound("sine").fm(' + n2(1.5 + e * 4) + ').fmh(' + Rng.int(br, 1, 2) + ')' +
             '.lpf(' + Math.round(cut * 1.3) + ').gain(' + n2(0.7 + e * 0.1) + ')';
         } else {
@@ -950,27 +1000,38 @@
       let pat;
       if (gid === 'trap' || gid === 'drill') {
         // Half-time: snare on beat 3 = 4 elements, each one beat, third is the hit
-        pat = Rng.pick(cr, [
+        pat = turn(3, 0, [
           '~ ~ ' + hit + ' ~',
           '~ ~ [' + hit + ' ' + hit + '] ~',
           '~ ~ ' + hit + ' [~ ' + hit + ']',
+          '~ ~ ' + hit + ' [~ ~ ~ ' + hit + ']',
+          '~ ~ [' + hit + ' ~ ~ ' + hit + '] ~',
+          '~ [~ ~ ~ ' + hit + '] ' + hit + ' ~',
         ]);
       } else if ((gid === 'metal' || gid === 'rock') && bucket >= 3) {
         // High-energy metal/rock: the kick has gone double-time, so the snare
         // matches it with a driving/blast feel instead of a plain 2&4 (E-14).
-        pat = Rng.pick(cr, [
+        pat = turn(3, 0, [
           '~ ' + hit + ' ~ ' + hit + ' ~ ' + hit + ' ~ ' + hit,   // straight 8th backbeat drive
           hit + '*8',                                              // blast-beat snare
           '~ ' + hit + ' [' + hit + ' ' + hit + '] ' + hit,       // filled backbeat
           '[' + hit + ' ' + hit + '] ' + hit + ' [' + hit + ' ' + hit + '] ' + hit,
+          '~ ' + hit + ' ~ ' + hit + ' ~ ' + hit + ' ~ [' + hit + ' ' + hit + ']',
+          '[~ ' + hit + '] [~ ' + hit + '] [~ ' + hit + '] [~ ' + hit + ']',
         ]);
       } else {
         // Standard backbeat: beats 2 and 4
-        pat = Rng.pick(cr, [
+        // (ghost notes and late flams around the 2 and 4 — the backbeat stays put)
+        pat = turn(3, 0, [
           '~ ' + hit + ' ~ ' + hit,
           '~ ' + hit + ' ~ [' + hit + ' ' + hit + ']',
           '~ ' + hit + ' ~ ' + hit + '*2',
+          '~ ' + hit + ' [~ ~ ~ ' + hit + '] ' + hit,
+          '~ [' + hit + ' ~ ~ ' + hit + '] ~ ' + hit,
+          '~ ' + hit + ' ~ [~ ' + hit + ']',
+          '~ ' + hit + ' [~ ' + hit + '] ' + hit,
         ]);
+        if (Rng.chance(cr, 0.35)) pat = turnaround(pat, cr, ['[' + hit + ' ' + hit + ']', '[~ ' + hit + ']', hit + '*4']);
       }
       let clap = 's("' + pat + '").gain(' + n2(0.45 + e * 0.12) + ').room(' + n2(0.22 + (1 - e) * 0.2) + ')';
       if (Rng.chance(cr, 0.3)) clap += '.speed(' + n2(0.9 + Rng.int(cr, 0, 3) * 0.1) + ')';
@@ -1002,16 +1063,23 @@
       // Usually one voicing colours the whole loop; ~30% of the time (rolled on
       // the chord rng, so it's stable per variant) pick a voicing PER degree for
       // a richer, less-uniform harmony (E-10). Both paths stay paren-balanced.
+      // A third path voice-LEADS the loop (Theory.ledSeq): each chord takes the
+      // inversion nearest the last, so the comping moves by steps instead of
+      // parallel blocks. Which path is rotated by variant, as is the voicing.
       let seq;
-      if (s.prog.length > 1 && Rng.chance(chr, 0.3)) {
+      const harm = turn(4, 0, ['block', 'led', 'mixed', 'led', 'block']);
+      const kind = turn(4, 1, voicingsFor);
+      if (harm === 'mixed' && s.prog.length > 1) {
         seq = '<' + s.prog.map((d) => {
           const v = Rng.pick(chr, voicingsFor);
           return '[' + Theory.voicing(v, d, penta).join(',') + ']';
         }).join(' ') + '>';
+      } else if (harm === 'led') {
+        seq = Theory.ledSeq(s.prog, kind, penta, Theory.stepsIn(scale));
       } else {
-        seq = Theory.voicingSeq(s.prog, Rng.pick(chr, voicingsFor), penta);
+        seq = Theory.voicingSeq(s.prog, kind, penta);
       }
-      let voice = Rng.int(chr, 0, 2);
+      let voice = turn(4, 2, [0, 1, 2, 1, 0, 2]);
       // Rock/metal always hit the driven stab, house lives on the piano stab,
       // and synthwave leans hard into the lush pad.
       if (gid === 'rock' || gid === 'metal' || gid === 'house') voice = 0;
@@ -1021,10 +1089,11 @@
         // Piano stab: hard transient, short tail — punchy trap chord hit
         // rock/metal strum the stab across the bar; house rides the offbeat
         const stabPat = (gid === 'rock' || gid === 'metal')
-          ? Rng.pick(chr, ['x ~ x ~', 'x x ~ x', 'x ~ [x x] ~', 'x ~ x x'])
+          ? turn(4, 3, ['x ~ x ~', 'x x ~ x', 'x ~ [x x] ~', 'x ~ x x', 'x ~ ~ [~ x] ~ ~ x ~', '[x x] ~ x ~', 'x ~ ~ x ~ ~ x ~'])
           : gid === 'house'
-          ? Rng.pick(chr, ['~ x ~ x', '~ x ~ [x x]', '~ [~ x] ~ x'])
-          : Rng.pick(chr, ['x ~ ~ ~', 'x ~ x ~', 'x ~ ~ x', 'x x ~ ~', 'x ~ x x', '~ x ~ x']);
+          ? turn(4, 3, ['~ x ~ x', '~ x ~ [x x]', '~ [~ x] ~ x', '[~ x] [~ x] [~ x] [~ x]', '~ x ~ ~ ~ x ~ x', '[~ x] ~ [~ x] [~ x]', '~ ~ x ~ ~ x ~ ~'])
+          : turn(4, 3, ['x ~ ~ ~', 'x ~ x ~', 'x ~ ~ x', 'x x ~ ~', 'x ~ x x', '~ x ~ x',
+            'x ~ ~ x ~ ~ x ~', '[~ x] ~ ~ x', 'x ~ ~ ~ ~ ~ [~ x] ~', '~ ~ x ~ ~ x ~ ~']);
         chord = 'n("' + seq + '").scale(' + scl(3) + ')' +
           '.struct("' + stabPat + '")' +
           '.sound("sawtooth").lpf(' + Math.round(gid === 'house' ? 1200 + e * 900 : 1800 + e * 1200) + ')' +
@@ -1037,13 +1106,19 @@
         const wave = Rng.pick(chr, ['triangle', 'sine']);
         const cut = Math.round(700 + e * 800);
         const atk = n2(0.2 + Rng.int(chr, 0, 3) * 0.12);
+        // a pad either swells once a bar or re-strikes in a slow pulse
+        const padPulse = turn(4, 3, ['', '', 'x ~ ~ ~ ~ ~ x ~', 'x ~ ~ x ~ ~ x ~', 'x ~ ~ ~ x ~ ~ ~']);
         chord = 'n("' + seq + '").scale(' + scl(3) + ')' +
+          (padPulse ? '.struct("' + padPulse + '")' : '') +
           '.sound("' + wave + '").lpf(' + cut + ')' +
           '.attack(' + atk + ').release(' + n2(0.5 + (1 - e) * 0.5) + ')' +
           '.gain(' + n2(0.2 + e * 0.12) + ').room(' + n2(0.45 + (1 - e) * 0.25) + ')';
       } else {
         // Plucked / muted square: sharp envelope, slightly shaped — boom bap soul
+        // the pluck comps a rhythm (a single pluck a bar decays to nothing)
+        const comp = turn(4, 3, ['x ~ ~ x ~ ~ x ~', '~ x ~ x', 'x ~ x ~ ~ x ~ ~', '[~ x] ~ [~ x] ~', 'x ~ ~ ~ ~ x ~ x', '~ ~ x ~ x ~ ~ x']);
         chord = 'n("' + seq + '").scale(' + scl(3) + ')' +
+          '.struct("' + comp + '")' +
           '.sound("square").lpf(' + Math.round(1200 + e * 1500) + ')' +
           '.attack(0.01).decay(' + n2(0.2 + e * 0.3) + ').release(0.15)' +
           '.shape(' + n2(0.1 + e * 0.1) + ')' +
@@ -1066,19 +1141,43 @@
       // lift even though it's a "bright" genre for phrasing/swing purposes (E-17).
       const octLift = gid === 'rb' || gid === 'loFi' || gid === 'synthwave';
       const oct = ((e > 0.6 && Rng.chance(lr, 0.5)) || (octLift && Rng.chance(lr, gid === 'synthwave' ? 0.6 : 0.3))) ? 6 : 5;
-      // phrase vs single cell: a call-and-response answers itself each cycle
+      // The line itself: mostly composed by Theory.melody from independent
+      // dimensions — rhythmic FEEL, CONTOUR and phrase FORM are each rotated by
+      // variant (so v, v+1, v+2 change the feel, the shape AND the development,
+      // never just a note or two), with range, start degree, ornaments and the
+      // exact rhythm cell rolled on the lane rng. One slot in the form rotation
+      // keeps the hand-written cells/phrases in play as a curated hook.
+      const steps = Theory.stepsIn(scale);
+      const form = turn(5, 2, Theory.LEAD_FORMS.concat(['lib']));
       let seq;
-      if (Theory.MELODY_PHRASES && Theory.MELODY_PHRASES.length && Rng.chance(lr, 0.65)) {
-        const ph = Rng.pick(lr, Theory.MELODY_PHRASES);
-        seq = '<[' + ph[0] + '] [' + ph[1] + ']>';
+      if (form === 'lib') {
+        if (Rng.chance(lr, 0.65)) {
+          const ph = Rng.pick(lr, Theory.MELODY_PHRASES);
+          seq = '<[' + ph[0] + '] [' + ph[1] + ']>';
+        } else {
+          seq = Rng.pick(lr, Theory.MELODY_CELLS);
+        }
       } else {
-        seq = Rng.pick(lr, Theory.MELODY_CELLS);
+        const contourIdx = turn(5, 1, Array.from({ length: Theory.CONTOUR_COUNT }, (_, k) => k));
+        seq = Theory.melody({
+          rng: lr,
+          feel: turn(5, 0, Theory.LEAD_FEELS[gid] || Theory.LEAD_FEELS.trap),
+          contour: contourIdx,
+          form: form,
+          steps: steps,
+          prog: s.prog,
+          top: oct >= 6 ? steps : steps + 4, // an octave-6 line tops out an octave up, as the cells did
+        });
       }
       // rock and metal want the saw's bite; everyone else rolls the wave
       const wave = (gid === 'rock' || gid === 'metal')
         ? 'sawtooth'
         : Rng.pick(lr, ['triangle', 'sawtooth', 'square']);
       let lead = 'n("' + seq + '").scale(' + scl(oct) + ').sound("' + wave + '")';
+      // articulation, rotated too: a plucked line, a held legato line, or plain
+      const artic = turn(5, 3, ['', 'pluck', 'legato', '', 'pluck']);
+      if (artic === 'pluck') lead += '.attack(0.005).decay(' + n2(0.1 + e * 0.1) + ').release(0.08)';
+      else if (artic === 'legato') lead += '.attack(0.03).release(' + n2(0.3 + (1 - e) * 0.3) + ')';
       if (Rng.chance(lr, 0.4)) lead += '.fm(' + n2(1 + e * 3) + ').fmh(' + Rng.int(lr, 1, 3) + ')';
       // always filtered — an unfiltered sawtooth up here is piercing
       lead += '.lpf(' + Math.round(1500 + e * 2800) + ')';
@@ -1108,7 +1207,10 @@
     //   2 = detuned triangle chord pad — choir shimmer.
     if (on(6)) {
       const ar = lrng(6);
-      const atmoVoice = Rng.int(ar, 0, 2);
+      // six voices rotated by variant: 3 = a slow high arpeggio through each
+      // chord's 7th, 4 = a noise wash whose filter breathes, 5 = a root+fifth
+      // drone — so a rework of the air always changes what the air IS.
+      const atmoVoice = turn(6, 0, [0, 1, 2, 3, 4, 5]);
       if (atmoVoice === 0) {
         const col = Rng.pick(ar, ['pink', 'brown']);
         put(6,
@@ -1119,6 +1221,26 @@
         put(6,
           'n("' + rootSeq + '").scale(' + scl(5) + ')' +
           '.sound("sine").slow(2).gain(' + n2(0.08 + e * 0.05) + ').lpf(' + Math.round(800 + e * 600) + ').room(0.7)'
+        );
+      } else if (atmoVoice === 3) {
+        const arp = '<' + s.prog.map((d) => '[' + Rng.pick(ar, [[0, 2, 4, 6], [0, 4, 2, 6], [6, 4, 2, 0], [0, 2, 4, 2]]).map((x) => d + x).join(' ') + ']').join(' ') + '>';
+        put(6,
+          'n("' + arp + '").scale(' + scl(5) + ')' +
+          '.sound("sine").slow(2).attack(0.2).release(1).gain(' + n2(0.06 + e * 0.05) + ')' +
+          '.lpf(' + Math.round(1400 + e * 1600) + ').delay(0.4).delaytime(0.375).delayfeedback(0.4).room(0.8)'
+        );
+      } else if (atmoVoice === 4) {
+        const col = Rng.pick(ar, ['pink', 'brown', 'white']);
+        put(6,
+          's("' + col + '").gain(' + n2(0.05 + e * 0.05) + ')' +
+          '.lpf(sine.range(' + Rng.pick(ar, ['400,3000', '600,5000', '300,2000']) + ').slow(' + Rng.pick(ar, [4, 8, 16]) + ')).hpf(250).room(0.8)'
+        );
+      } else if (atmoVoice === 5) {
+        const fifth = Theory.stepsIn(scale) === 5 ? 3 : 4;
+        put(6,
+          'n("<' + s.prog.map((d) => '[' + d + ',' + (d + fifth) + ']').join(' ') + '>").scale(' + scl(3) + ')' +
+          '.sound("' + Rng.pick(ar, ['sine', 'triangle']) + '").attack(0.6).release(1.2)' +
+          '.gain(' + n2(0.07 + e * 0.05) + ').lpf(' + Math.round(500 + e * 500) + ').room(0.7)'
         );
       } else {
         // Choir shimmer: triangle 7th chord, slow swell, high room
